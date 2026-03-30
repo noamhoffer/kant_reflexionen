@@ -65,8 +65,8 @@ _KORPORA = "https://korpora.org/kant"
 # Set these to your GitHub Pages URLs once deployed; §-level deep links
 # (e.g. meier.html#40) will then work automatically.
 # Leave as None to fall back to the korpora.org page-level link.
-MEIER_URL    = None   # e.g. "https://yourname.github.io/kant-sources/meier.html"
-EBERHARD_URL = None   # e.g. "https://yourname.github.io/kant-sources/eberhard.html"
+MEIER_URL    = "https://noamhoffer.github.io/kant-sources/meier.html"   # e.g. "https://noamhoffer.github.io/kant-sources/meier.html"
+EBERHARD_URL = "https://noamhoffer.github.io/kant-sources/eberhard.html"   # e.g. "https://noamhoffer.github.io/kant-sources/eberhard.html"
 
 _BASE: dict[str, str] = {
     "Pr": f"{_KORPORA}/agb-initia/index.html",

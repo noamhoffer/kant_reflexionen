@@ -1,2 +1,3 @@
 *.pyc
+kant_reflexionen.db-*
 .env
