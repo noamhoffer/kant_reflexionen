@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kant Reflexionen</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  /* ── Reset & base ─────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #1a1a2e;
+    --surface:   #16213e;
+    --card:      #0f3460;
+    --accent:    #e94560;
+    --accent2:   #f5a623;
+    --text:      #e0e0e0;
+    --muted:     #8899aa;
+    --border:    #1e3a5f;
+    --radius:    6px;
+    --font:      'Georgia', serif;
+    --mono:      'Courier New', monospace;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  /* ── Header ───────────────────────────────────────────────────────── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: baseline;
+    gap: 1.5rem;
+  }
+  header h1 { font-size: 1.4rem; color: var(--accent2); letter-spacing: .03em; }
+  header h1 span { color: var(--muted); font-size: .85rem; font-family: sans-serif; margin-left: .5rem; }
+  #db-stats { font-size: .8rem; color: var(--muted); font-family: sans-serif; margin-left: auto; }
+
+  /* ── Layout ───────────────────────────────────────────────────────── */
+  main {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    height: calc(100vh - 57px);
+    overflow: hidden;
+  }
+
+  /* ── Left panel ───────────────────────────────────────────────────── */
+  #left {
+    grid-row: 1 / 3;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #search-panel {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+  }
+  #search-panel label {
+    font-size: .7rem;
+    color: var(--muted);
+    font-family: sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+  }
+
+  input, select {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: .45rem .6rem;
+    border-radius: var(--radius);
+    font-family: sans-serif;
+    font-size: .85rem;
+    outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent2); }
+
+  .date-row { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: .5rem 1rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-family: sans-serif;
+    font-size: .85rem;
+    transition: opacity .15s;
+  }
+  button:hover { opacity: .85; }
+  button.secondary {
+    background: var(--card);
+    color: var(--muted);
+  }
+  .btn-row { display: flex; gap: .5rem; }
+
+  /* ── Results list ─────────────────────────────────────────────────── */
+  #results-header {
+    padding: .6rem 1rem;
+    font-size: .75rem;
+    color: var(--muted);
+    font-family: sans-serif;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #results-list {
+    flex: 1;
+    overflow-y: auto;
+  }
+  .result-card {
+    padding: .75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .1s;
+  }
+  .result-card:hover, .result-card.active { background: var(--card); }
+  .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: .25rem;
+  }
+  .card-num {
+    font-family: var(--mono);
+    font-size: .95rem;
+    color: var(--accent2);
+    font-weight: bold;
+  }
+  .card-dating {
+    font-size: .75rem;
+    color: var(--muted);
+    font-family: sans-serif;
+  }
+  .card-source {
+    font-size: .75rem;
+    color: #7ec8e3;
+    font-family: sans-serif;
+    margin-bottom: .25rem;
+  }
+  .card-preview {
+    font-size: .8rem;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: sans-serif;
+  }
+
+  /* ── Pagination ───────────────────────────────────────────────────── */
+  #pagination {
+    padding: .6rem 1rem;
+    display: flex;
+    gap: .4rem;
+    align-items: center;
+    justify-content: center;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  #pagination button {
+    padding: .3rem .6rem;
+    font-size: .75rem;
+    background: var(--card);
+    color: var(--text);
+  }
+  #pagination button.current-page {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* ── Right top: timeline ──────────────────────────────────────────── */
+  #timeline-panel {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 1.5rem .5rem;
+    position: relative;
+  }
+  #timeline-panel h2 {
+    font-size: .75rem;
+    color: var(--muted);
+    font-family: sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    margin-bottom: .5rem;
+  }
+  #timeline-panel h2 span {
+    color: var(--accent2);
+    margin-left: .5rem;
+    font-size: .7rem;
+  }
+  #chart-container { height: 130px; position: relative; }
+
+  /* ── Right bottom: detail panel ───────────────────────────────────── */
+  #detail-panel {
+    overflow-y: auto;
+    padding: 1.5rem 2rem;
+  }
+
+  #detail-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--muted);
+    font-family: sans-serif;
+    font-size: .9rem;
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  #detail-content { display: none; }
+
+  .detail-header {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  .detail-num {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+    color: var(--accent2);
+  }
+  .detail-dating {
+    font-size: .85rem;
+    color: var(--muted);
+    font-family: sans-serif;
+  }
+  .detail-dates {
+    font-size: .85rem;
+    color: #7ec8e3;
+    font-family: sans-serif;
+  }
+
+  .detail-meta {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: .75rem 1rem;
+    margin-bottom: 1.2rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .35rem .75rem;
+    font-family: sans-serif;
+    font-size: .82rem;
+  }
+  .meta-label { color: var(--muted); white-space: nowrap; }
+  .meta-value { color: var(--text); }
+  .meta-value a {
+    color: #7ec8e3;
+    text-decoration: none;
+  }
+  .meta-value a:hover { text-decoration: underline; }
+
+  .detail-nav {
+    display: flex;
+    gap: .5rem;
+    margin-bottom: 1.2rem;
+    font-family: sans-serif;
+    font-size: .82rem;
+  }
+  .detail-nav button {
+    background: var(--card);
+    color: var(--muted);
+    padding: .3rem .8rem;
+    font-size: .8rem;
+  }
+  .detail-nav span { flex: 1; text-align: center; color: var(--muted); align-self: center; }
+
+  .detail-text {
+    line-height: 1.8;
+    font-size: .92rem;
+    white-space: pre-wrap;
+    color: var(--text);
+  }
+  .detail-text i        { font-style: italic; color: #c8d8e8; }
+  .detail-text s,
+  .detail-text [style*="line-through"] {
+    text-decoration: line-through;
+    color: var(--muted);
+    opacity: .75;
+  }
+  .detail-text [style*="letter-spacing"] {
+    letter-spacing: .25em;
+    color: #e8d8a0;
+  }
+  .rfl-interlinear { color: #90c090; font-size: .85em; }
+  .rfl-marginal    { color: #90b0d0; font-size: .85em; }
+
+  /* ── Loading / error ──────────────────────────────────────────────── */
+  .loading {
+    text-align: center;
+    padding: 2rem;
+    color: var(--muted);
+    font-family: sans-serif;
+    font-size: .85rem;
+  }
+  .error-msg {
+    background: #3d1515;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: .75rem 1rem;
+    font-family: sans-serif;
+    font-size: .82rem;
+    color: #ff9999;
+    margin: .5rem 1rem;
+  }
+
+  /* ── Multi-select dropdown ───────────────────────────────────────── */
+  .multi-select { position: relative; }
+  .multi-select-trigger {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: .45rem .6rem;
+    border-radius: var(--radius);
+    font-family: sans-serif;
+    font-size: .85rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .multi-select-trigger:hover { border-color: var(--accent2); }
+  .multi-select-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 0; right: 0;
+    background: var(--card);
+    border: 1px solid var(--accent2);
+    border-radius: var(--radius);
+    z-index: 100;
+    padding: .3rem 0;
+  }
+  .multi-select-menu.open { display: block; }
+  .cb-option {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .35rem .75rem;
+    font-family: sans-serif;
+    font-size: .85rem;
+    cursor: pointer;
+  }
+  .cb-option:hover { background: var(--surface); }
+  .cb-option input[type=checkbox] {
+    width: auto;
+    accent-color: var(--accent2);
+    cursor: pointer;
+  }
+
+  /* ── Scrollbar ────────────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Kant Reflexionen <span>Nachlass AA 14–19</span></h1>
+  <div id="db-stats">Loading…</div>
+</header>
+
+<main>
+
+  <!-- ── Left: search + results ──────────────────────────────────── -->
+  <div id="left">
+
+    <div id="search-panel">
+      <label for="q-input">Search text</label>
+      <input id="q-input" type="search" placeholder="e.g. Vernunft, Erkenntnis…">
+
+      <label>Volumes</label>
+      <div class="multi-select" id="vol-dropdown">
+        <div class="multi-select-trigger" id="vol-trigger">All volumes</div>
+        <div class="multi-select-menu" id="vol-menu">
+          <label class="cb-option"><input type="checkbox" value="14"> AA 14</label>
+          <label class="cb-option"><input type="checkbox" value="15"> AA 15</label>
+          <label class="cb-option"><input type="checkbox" value="16"> AA 16</label>
+          <label class="cb-option"><input type="checkbox" value="17"> AA 17</label>
+          <label class="cb-option"><input type="checkbox" value="18"> AA 18</label>
+          <label class="cb-option"><input type="checkbox" value="19"> AA 19</label>
+        </div>
+      </div>
+
+      <label for="source-select">Source</label>
+      <select id="source-select">
+        <option value="">All sources</option>
+        <option value="L">L — Meier, Vernunftlehre</option>
+        <option value="M">M — Baumgarten, Metaphysica</option>
+        <option value="Pr">Pr — Baumgarten, Initia</option>
+        <option value="Th">Th — Eberhard, Theologie</option>
+        <option value="J">J — Achenwall, Juris naturalis</option>
+      </select>
+
+      <label>Date range (year)</label>
+      <div class="date-row">
+        <input id="date-from" type="number" placeholder="From e.g. 1769" min="1750" max="1804">
+        <input id="date-to"   type="number" placeholder="To e.g. 1780"   min="1750" max="1804">
+      </div>
+
+      <div class="btn-row">
+        <button id="search-btn">Search</button>
+        <button id="clear-btn" class="secondary">Clear</button>
+      </div>
+
+      <label for="goto-input">Go to reflexion №</label>
+      <div class="btn-row">
+        <input id="goto-input" type="text" placeholder="e.g. 1562 or 158a" style="flex:1">
+        <button id="goto-btn" style="white-space:nowrap">Go</button>
+      </div>
+    </div>
+
+    <div id="results-header">
+      <span id="results-count">—</span>
+      <span id="results-page"></span>
+    </div>
+    <div id="results-list"><div class="loading">Enter a search or browse the timeline</div></div>
+    <div id="pagination"></div>
+
+  </div>
+
+  <!-- ── Right top: timeline ─────────────────────────────────────── -->
+  <div id="timeline-panel">
+    <h2>Timeline <span id="timeline-subtitle">— reflexionen by year of composition</span></h2>
+    <div id="chart-container">
+      <canvas id="timeline-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- ── Right bottom: detail ────────────────────────────────────── -->
+  <div id="detail-panel">
+    <div id="detail-empty">
+      ← Select a reflexion to read it<br>
+      <small>or click a bar in the timeline to filter by year</small>
+    </div>
+    <div id="detail-content">
+      <div class="detail-header">
+        <span class="detail-num" id="d-number"></span>
+        <span class="detail-dating" id="d-dating"></span>
+        <span class="detail-dates" id="d-dates"></span>
+      </div>
+      <div class="detail-meta" id="d-meta"></div>
+      <div class="detail-nav">
+        <button id="nav-prev">← prev</button>
+        <span id="nav-info"></span>
+        <button id="nav-next">next →</button>
+      </div>
+      <div class="detail-text" id="d-text"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── API helpers ───────────────────────────────────────────────────────────────
+const api = {
+  async get(path) {
+    const r = await fetch(path);
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  }
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const state = {
+  page: 1,
+  pageSize: 20,
+  total: 0,
+  pages: 0,
+  currentNumber: null,
+  activeCard: null,
+  // current search params
+  q: '', source: '', dateFrom: '', dateTo: '', volumes: [],
+};
+
+// ── Timeline chart ────────────────────────────────────────────────────────────
+let chart     = null;
+let chartData = null;   // keep raw data for click handler
+
+async function loadTimeline(source = '') {
+  const params = new URLSearchParams();
+  if (source) params.set('source', source);
+  const data = await api.get(`/api/timeline${params.size ? '?' + params : ''}`);
+  if (!data.length) return;
+  chartData = data;
+  renderTimeline(data);
+}
+
+function renderTimeline(data) {
+  const labels  = data.map(d => d.year);
+  const density = data.map(d => d.count);        // weighted spread (float)
+  const exact   = data.map(d => d.count_exact);  // certain point-datings (int)
+
+  const ctx = document.getElementById('timeline-chart').getContext('2d');
+  if (chart) chart.destroy();
+
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        // Dataset 0 — density area (filled line, drawn as bar type with fill)
+        {
+          type: 'line',
+          label: 'Date range density',
+          data: density,
+          fill: true,
+          backgroundColor: 'rgba(249,166,35,0.18)',
+          borderColor:     'rgba(249,166,35,0.75)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0.3,
+          order: 2,   // drawn behind bars
+        },
+        // Dataset 1 — exact (certain) datings as bars
+        {
+          type: 'bar',
+          label: 'Certain datings',
+          data: exact,
+          backgroundColor: 'rgba(233,69,96,0.65)',
+          borderColor:     'rgba(233,69,96,0.9)',
+          borderWidth: 0,
+          order: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: {
+            color: '#8899aa',
+            font: { size: 9, family: 'sans-serif' },
+            boxWidth: 10,
+            padding: 8,
+          }
+        },
+        tooltip: {
+          callbacks: {
+            title: items => `${items[0].label}`,
+            label: item => {
+              if (item.datasetIndex === 0)
+                return ` density: ${item.raw.toFixed(1)} (date range spread)`;
+              return ` certain: ${item.raw} reflexionen`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8899aa', font: { size: 9 }, maxRotation: 0,
+                   callback: (v, i) => labels[i] % 10 === 0 ? labels[i] : '' },
+          grid: { color: '#1e3a5f' }
+        },
+        y: {
+          ticks: { color: '#8899aa', font: { size: 9 } },
+          grid:  { color: '#1e3a5f' }
+        }
+      },
+      onClick(evt, elements) {
+        if (!elements.length) return;
+        const idx  = elements[0].index;
+        const year = labels[idx];
+        // Clicking sets a ±2 year window to capture the clicked peak
+        const from = year;
+        const to   = year;
+        document.getElementById('date-from').value = from;
+        document.getElementById('date-to').value   = to;
+        state.dateFrom = from;
+        state.dateTo   = to;
+        state.page = 1;
+        doSearch();
+        // Highlight the selected year on both datasets
+        chart.data.datasets[1].backgroundColor =
+          exact.map((_, i) => i === idx
+            ? 'rgba(233,69,96,1)' : 'rgba(233,69,96,0.65)');
+        chart.update();
+      }
+    }
+  });
+}
+
+// ── DB stats ──────────────────────────────────────────────────────────────────
+async function loadStats() {
+  const s = await api.get('/api/stats');
+  const vols = Object.entries(s.by_volume)
+    .map(([v, c]) => `AA${v}: ${c}`).join(' · ');
+  document.getElementById('db-stats').textContent =
+    `${s.total.toLocaleString()} reflexionen · ${vols}`;
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+function buildSearchURL(page = 1) {
+  const params = new URLSearchParams();
+  if (state.q)        params.set('q',         state.q);
+  if (state.source)   params.set('source',    state.source);
+  if (state.dateFrom) params.set('date_from', state.dateFrom);
+  if (state.dateTo)   params.set('date_to',   state.dateTo);
+  state.volumes.forEach(v => params.append('volume', v));
+  params.set('page',      page);
+  params.set('page_size', state.pageSize);
+  return `/api/search?${params}`;
+}
+
+async function doSearch(page = 1) {
+  state.page = page;
+  const list = document.getElementById('results-list');
+  list.innerHTML = '<div class="loading">Searching…</div>';
+
+  try {
+    const data = await api.get(buildSearchURL(page));
+    state.total = data.total;
+    state.pages = data.pages;
+    renderResults(data.results);
+    renderPagination();
+    document.getElementById('results-count').textContent =
+      `${data.total.toLocaleString()} results`;
+    document.getElementById('results-page').textContent =
+      data.pages > 1 ? `p. ${data.page}/${data.pages}` : '';
+  } catch(e) {
+    list.innerHTML = `<div class="error-msg">Error: ${e.message}</div>`;
+  }
+}
+
+function readInputs() {
+  state.q        = document.getElementById('q-input').value.trim();
+  state.source   = document.getElementById('source-select').value;
+  state.dateFrom = document.getElementById('date-from').value;
+  state.dateTo   = document.getElementById('date-to').value;
+  state.volumes  = [...document.querySelectorAll('#vol-menu input:checked')]
+                     .map(cb => parseInt(cb.value));
+}
+
+// ── Results rendering ─────────────────────────────────────────────────────────
+function renderResults(results) {
+  const list = document.getElementById('results-list');
+  if (!results.length) {
+    list.innerHTML = '<div class="loading">No results found.</div>';
+    return;
+  }
+  list.innerHTML = results.map(r => {
+    const dateStr = r.date_from
+      ? (r.date_from === r.date_to ? r.date_from : `${r.date_from}–${r.date_to}`)
+      : '';
+    const preview = (r.text_preview || '').replace(/\n/g, ' ');
+    return `
+      <div class="result-card${r.number === state.currentNumber ? ' active' : ''}"
+           data-num="${r.number}" onclick="loadReflexion('${r.number}')">
+        <div class="card-top">
+          <span class="card-num">${r.number}</span>
+          <span class="card-dating">${r.dating_raw || ''} ${dateStr ? '· '+dateStr : ''}</span>
+        </div>
+        <div class="card-source">${r.source_raw || ''}</div>
+        <div class="card-preview">${preview}</div>
+      </div>`;
+  }).join('');
+}
+
+// ── Pagination ────────────────────────────────────────────────────────────────
+function renderPagination() {
+  const el = document.getElementById('pagination');
+  if (state.pages <= 1) { el.innerHTML = ''; return; }
+
+  const cur = state.page;
+  const max = state.pages;
+  // Show window of pages around current
+  const pages = new Set([1, max, cur, cur-1, cur+1, cur-2, cur+2]
+    .filter(p => p >= 1 && p <= max));
+  const sorted = [...pages].sort((a,b) => a-b);
+
+  let html = '';
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) html += `<span style="color:var(--muted)">…</span>`;
+    html += `<button class="${p === cur ? 'current-page' : ''}"
+               onclick="doSearch(${p})">${p}</button>`;
+    prev = p;
+  }
+  el.innerHTML = html;
+}
+
+// ── Detail panel ──────────────────────────────────────────────────────────────
+async function loadReflexion(number) {
+  state.currentNumber = number;
+
+  // Highlight active card
+  document.querySelectorAll('.result-card').forEach(el => {
+    el.classList.toggle('active', el.dataset.num === number);
+  });
+
+  try {
+    const r   = await api.get(`/api/reflexion/${number}`);
+    const nav = await api.get(`/api/neighbours/${number}`);
+    renderDetail(r, nav);
+  } catch(e) {
+    document.getElementById('detail-empty').style.display = 'none';
+    document.getElementById('detail-content').style.display = 'none';
+  }
+}
+
+function renderDetail(r, nav) {
+  document.getElementById('detail-empty').style.display   = 'none';
+  document.getElementById('detail-content').style.display = 'block';
+
+  document.getElementById('d-number').textContent  = `Reflexion ${r.number}`;
+  document.getElementById('d-dating').textContent  = r.dating_raw ? `[${r.dating_raw}]` : '';
+
+  const dateStr = r.date_from
+    ? (r.date_from === r.date_to ? String(r.date_from) : `${r.date_from}–${r.date_to}`)
+    : '';
+  document.getElementById('d-dates').textContent = dateStr;
+
+  // Meta block
+  const meta = [];
+  if (r.source_raw) {
+    const titleStr = r.source_title ? ` — ${r.source_title}` : '';
+    const linkStr  = r.source_url
+      ? `<a href="${r.source_url}" target="_blank" title="Open source text">${r.source_raw}</a>`
+      : r.source_raw;
+    meta.push(['Source', linkStr + titleStr]);
+  }
+  if (r.note_raw)   meta.push(['Location', r.note_raw]);
+  meta.push(['Volume', `AA ${r.volume}, pp. ${r.page_start}–${r.page_end}`]);
+  if (r.url_start)
+    meta.push(['AA page', `<a href="${r.url_start}" target="_blank">korpora.org ↗</a>`]);
+
+  document.getElementById('d-meta').innerHTML = meta
+    .map(([k,v]) => `<span class="meta-label">${k}</span><span class="meta-value">${v}</span>`)
+    .join('');
+
+  const textEl = document.getElementById('d-text');
+  if (r.text_html) {
+    // Render preserved formatting; convert ( g ) and ( s ) to styled spans
+    let html = r.text_html
+      .replace(/\( g ([^)]+)\)/g,
+               '<span class="rfl-interlinear" title="Interlinear addition">↑$1↑</span>')
+      .replace(/\( s ([^)]+)\)/g,
+               '<span class="rfl-marginal"    title="Marginal addition">‖$1‖</span>');
+    textEl.innerHTML = html;
+    textEl.style.whiteSpace = 'pre-wrap';
+  } else {
+    // Fallback: plain text with ( g ) / ( s ) styled inline
+    let txt = (r.text || '(no text recorded)')
+      .replace(/\( g ([^)]+)\)/g,
+               '<span class="rfl-interlinear" title="Interlinear addition">↑$1↑</span>')
+      .replace(/\( s ([^)]+)\)/g,
+               '<span class="rfl-marginal"    title="Marginal addition">‖$1‖</span>');
+    textEl.innerHTML = txt;
+    textEl.style.whiteSpace = 'pre-wrap';
+  }
+
+  // Navigation
+  const prevBtn = document.getElementById('nav-prev');
+  const nextBtn = document.getElementById('nav-next');
+  prevBtn.disabled = !nav.prev;
+  nextBtn.disabled = !nav.next;
+  prevBtn.onclick = nav.prev ? () => loadReflexion(nav.prev) : null;
+  nextBtn.onclick = nav.next ? () => loadReflexion(nav.next) : null;
+  document.getElementById('nav-info').textContent =
+    `${nav.prev || '—'} ← ${r.number} → ${nav.next || '—'}`;
+}
+
+// ── Event listeners ───────────────────────────────────────────────────────────
+document.getElementById('search-btn').addEventListener('click', () => {
+  readInputs();
+  // Update timeline to reflect source filter
+  loadTimeline(state.source);
+  doSearch(1);
+});
+
+document.getElementById('q-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    readInputs();
+    doSearch(1);
+  }
+});
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+  document.getElementById('q-input').value       = '';
+  document.getElementById('source-select').value = '';
+  document.getElementById('date-from').value     = '';
+  document.getElementById('date-to').value       = '';
+  document.querySelectorAll('#vol-menu input').forEach(cb => cb.checked = false);
+  updateVolTrigger();
+  state.q = state.source = state.dateFrom = state.dateTo = '';
+  state.volumes = [];
+  state.page = 1;
+  document.getElementById('results-list').innerHTML =
+    '<div class="loading">Enter a search or browse the timeline</div>';
+  document.getElementById('results-count').textContent = '—';
+  document.getElementById('results-page').textContent  = '';
+  document.getElementById('pagination').innerHTML      = '';
+  loadTimeline();
+});
+
+document.getElementById('source-select').addEventListener('change', () => {
+  loadTimeline(document.getElementById('source-select').value);
+});
+
+function gotoReflexion() {
+  const num = document.getElementById('goto-input').value.trim();
+  if (num) loadReflexion(num);
+}
+
+document.getElementById('goto-btn').addEventListener('click', gotoReflexion);
+document.getElementById('goto-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') gotoReflexion();
+});
+
+// ── Volume multi-select dropdown ─────────────────────────────────────────────
+function updateVolTrigger() {
+  const checked = [...document.querySelectorAll('#vol-menu input:checked')];
+  document.getElementById('vol-trigger').textContent =
+    checked.length === 0 ? 'All volumes' :
+    checked.length === 6 ? 'All volumes' :
+    checked.map(cb => 'AA ' + cb.value).join(', ');
+}
+
+document.getElementById('vol-trigger').addEventListener('click', e => {
+  e.stopPropagation();
+  document.getElementById('vol-menu').classList.toggle('open');
+});
+
+document.getElementById('vol-menu').querySelectorAll('input').forEach(cb => {
+  cb.addEventListener('change', updateVolTrigger);
+});
+
+document.addEventListener('click', () => {
+  document.getElementById('vol-menu').classList.remove('open');
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async () => {
+  await loadStats();
+  await loadTimeline();
+  // Load first page of all results to populate list on startup
+  await doSearch(1);
+})();
+</script>
+</body>
+</html>

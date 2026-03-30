@@ -1,0 +1,17 @@
+# render.yaml — Render.com deployment configuration
+# Commit this file to the root of your GitHub repository.
+# Connect the repo in the Render dashboard and it will deploy automatically.
+
+services:
+  - type: web
+    name: kant-reflexionen
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DB_PATH
+        value: kant_reflexionen.db   # path to your SQLite file in the repo
+    disk:
+      name: kant-db
+      mountPath: /data
+      sizeGB: 1
