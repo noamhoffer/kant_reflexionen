@@ -682,7 +682,7 @@ def process_page(reflexionen: list[dict], volume: int, page: int, url: str,
             continue
 
         date_from, date_to = parse_dating(r["dating"])
-        source_url = resolve_source_url(r["source"])
+        source_url = resolve_source_url(r["source"], r["note"])
         upsert_reflexion(con, {
             "number":     r["number"],
             "volume":     volume,

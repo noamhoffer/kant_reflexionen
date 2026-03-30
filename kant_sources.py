@@ -65,8 +65,8 @@ _KORPORA = "https://korpora.org/kant"
 # Set these to your GitHub Pages URLs once deployed; §-level deep links
 # (e.g. meier.html#40) will then work automatically.
 # Leave as None to fall back to the korpora.org page-level link.
-MEIER_URL    = "https://noamhoffer.github.io/kant-sources/meier.html"   # e.g. "https://yourname.github.io/kant-sources/meier.html"
-EBERHARD_URL = "https://noamhoffer.github.io/kant-sources/eberhard.html"   # e.g. "https://yourname.github.io/kant-sources/eberhard.html"
+MEIER_URL    = None   # e.g. "https://yourname.github.io/kant-sources/meier.html"
+EBERHARD_URL = None   # e.g. "https://yourname.github.io/kant-sources/eberhard.html"
 
 _BASE: dict[str, str] = {
     "Pr": f"{_KORPORA}/agb-initia/index.html",
@@ -163,60 +163,53 @@ def _extract_paragraph(after_abbr: str) -> int | None:
 
 # ── Main resolver ──────────────────────────────────────────────────────────────
 
-def resolve_source_url(source_raw: str) -> str | None:
+def resolve_source_url(source_raw: str, note_raw: str = "") -> str | None:
     """
-    Given a raw source string from an Adickes header, return a direct URL
-    into the digitized source text, or None if the source is not online.
+    Return a §-level URL into the digitized source text, or None.
+
+    The §-number is extracted preferentially from note_raw, because source_raw
+    often contains a *physical page* in Kant's copy (e.g. "L 18" = page 18),
+    while note_raw contains the *section reference* (e.g. "Neben L §. 66-68").
 
     Parameters
     ----------
-    source_raw : str
-        e.g. "L 1", "M §. 7", "Pr §. 12", "Th §. 3", "J §. 85",
-             "L Bl.", "Ms.", "M", "R V"
-
-    Returns
-    -------
-    str or None
-        A URL with a §-level anchor where possible, or just the base page URL,
-        or None for sources that are not digitized online (B, R V, Ms., etc.).
+    source_raw : str   e.g. "L 18",  "M §. 7",  "Pr §. 12"
+    note_raw   : str   e.g. "Neben L §. 66-68",  "Zu M §. 398",  "" (absent)
     """
     if not source_raw:
         return None
 
     raw = source_raw.strip()
 
+    # §-number from note_raw takes priority over the number in source_raw
+    sec = _extract_paragraph(note_raw) if note_raw else None
+
     # ── Meier (L) ──────────────────────────────────────────────────────────────
     if raw.startswith("L") and not raw.startswith("L Bl"):
-        after = raw[1:].strip()
-        para  = _extract_paragraph(after)
+        para = sec or _extract_paragraph(raw[1:].strip())
         return _meier_url(para)
 
     # ── Baumgarten Metaphysica (M) ─────────────────────────────────────────────
     if raw.startswith("M") and not raw.startswith("Ms"):
-        after = raw[1:].strip()
-        para  = _extract_paragraph(after)
+        para = sec or _extract_paragraph(raw[1:].strip())
         if para is None:
-            return f"{_METAPHYSICA_BASE}/I.html"   # no § — link to start
-        file = _metaphysica_file(para)
-        return f"{_METAPHYSICA_BASE}/{file}#{para}"
+            return f"{_METAPHYSICA_BASE}/I.html"
+        return f"{_METAPHYSICA_BASE}/{_metaphysica_file(para)}#{para}"
 
     # ── Baumgarten Initia (Pr) ────────────────────────────────────────────────
     if raw.startswith("Pr"):
-        after = raw[2:].strip()
-        para  = _extract_paragraph(after)
-        base  = _BASE["Pr"]
+        para = sec or _extract_paragraph(raw[2:].strip())
+        base = _BASE["Pr"]
         return f"{base}#{para}" if para else base
 
     # ── Eberhard Theologia (Th) ───────────────────────────────────────────────
     if raw.startswith("Th"):
-        after = raw[2:].strip()
-        para  = _extract_paragraph(after)
+        para = sec or _extract_paragraph(raw[2:].strip())
         return _eberhard_url(para)
 
     # ── Achenwall (J) ─────────────────────────────────────────────────────────
     if raw.startswith("J") and not raw.startswith("J."):
-        after = raw[1:].strip()
-        para  = _extract_paragraph(after)
+        para = sec or _extract_paragraph(raw[1:].strip())
         return _achenwall_url(para)
 
     # ── Sources not available online ──────────────────────────────────────────
