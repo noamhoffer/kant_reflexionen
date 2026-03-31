@@ -65,20 +65,54 @@ _KORPORA = "https://korpora.org/kant"
 # Set these to your GitHub Pages URLs once deployed; §-level deep links
 # (e.g. meier.html#40) will then work automatically.
 # Leave as None to fall back to the korpora.org page-level link.
-MEIER_URL    = "https://noamhoffer.github.io/kant-sources/meier.html"   # e.g. "https://noamhoffer.github.io/kant-sources/meier.html"
-EBERHARD_URL = "https://noamhoffer.github.io/kant-sources/eberhard.html"   # e.g. "https://noamhoffer.github.io/kant-sources/eberhard.html"
+# Meier: two files — vernunftlehre_1.html §§ 1–284, vernunftlehre_2.html §§ 285–563
+# Eberhard: two files — same split structure (check actual § range once hosted)
+# Set these to your GitHub Pages base URL (directory, no trailing slash).
+# The resolver will append /vernunftlehre_1.html or /vernunftlehre_2.html automatically.
+MEIER_BASE    = "https://noamhoffer.github.io/kant-sources/meier"
+EBERHARD_BASE = "https://noamhoffer.github.io/kant-sources/eberhard"
+
+# § boundary between file 1 and file 2 for Meier and Eberhard.
+# Meier: vernunftlehre_1 ends at §284, vernunftlehre_2 starts at §285.
+# Eberhard: update this once you check vernunftlehre_2 first §.
+_MEIER_SPLIT    = 285
+_EBERHARD_SPLIT = 285   # update after checking eberhard/vernunftlehre_2.html
 
 _BASE: dict[str, str] = {
     "Pr": f"{_KORPORA}/agb-initia/index.html",
 }
 
-def _meier_url(paragraph: int | None) -> str:
-    base = MEIER_URL or f"{_KORPORA}/meier/"
-    return f"{base}#{paragraph}" if paragraph else base
 
-def _eberhard_url(paragraph: int | None) -> str:
-    base = EBERHARD_URL or f"{_KORPORA}/eberhard/eberhard.html"
-    return f"{base}#{paragraph}" if paragraph else base
+def _two_file_url(base: str, split: int,
+                  paragraph: int | None, is_page: bool = False) -> str:
+    """
+    Build a URL into a two-file source text (Meier or Eberhard).
+
+    If paragraph is a § number → #N anchor (section).
+    If paragraph is a page number (is_page=True) → #pN anchor (page).
+    File selection: §§/pages below split → file 1, otherwise → file 2.
+    """
+    if not base:
+        return f"{_KORPORA}/meier/"   # fallback if not configured
+    if paragraph is None:
+        return f"{base}/vernunftlehre_1.html"
+    file = "vernunftlehre_1.html" if paragraph < split else "vernunftlehre_2.html"
+    anchor = f"p{paragraph}" if is_page else str(paragraph)
+    return f"{base}/{file}#{anchor}"
+
+
+def _meier_url(paragraph: int | None, is_page: bool = False) -> str:
+    return _two_file_url(MEIER_BASE, _MEIER_SPLIT, paragraph, is_page)
+
+
+def _eberhard_url(paragraph: int | None, is_page: bool = False) -> str:
+    """Build a URL into the single-file Eberhard text."""
+    if not EBERHARD_URL:
+        return f"{_KORPORA}/eberhard/eberhard.html"  # fallback if not configured
+    if paragraph is None:
+        return EBERHARD_URL
+    anchor = f"p{paragraph}" if is_page else str(paragraph)
+    return f"{EBERHARD_URL}#{anchor}"
 
 # ── Baumgarten Metaphysica: § → HTML file mapping ─────────────────────────────
 #
@@ -186,15 +220,31 @@ def resolve_source_url(source_raw: str, note_raw: str = "") -> str | None:
 
     # ── Meier (L) ──────────────────────────────────────────────────────────────
     if raw.startswith("L") and not raw.startswith("L Bl"):
-        para = sec or _extract_paragraph(raw[1:].strip())
-        return _meier_url(para)
+        raw_tail = raw[1:].strip()
+        src_has_sec = bool(re.search(r"§", raw_tail))
+        if sec or src_has_sec:
+            # § from note_raw or source_raw → section anchor #N
+            para = sec or _extract_paragraph(raw_tail)
+            return _meier_url(para, is_page=False)
+        else:
+            # Bare page number in source_raw → page anchor #pN
+            page = _extract_paragraph(raw_tail)
+            return _meier_url(page, is_page=True)
 
     # ── Baumgarten Metaphysica (M) ─────────────────────────────────────────────
     if raw.startswith("M") and not raw.startswith("Ms"):
-        para = sec or _extract_paragraph(raw[1:].strip())
+        raw_tail = raw[1:].strip()
+        src_has_sec = bool(re.search(r"§", raw_tail))
+        para = sec or _extract_paragraph(raw_tail)
         if para is None:
             return f"{_METAPHYSICA_BASE}/I.html"
-        return f"{_METAPHYSICA_BASE}/{_metaphysica_file(para)}#{para}"
+        file = _metaphysica_file(para)
+        # § in note_raw or in source_raw → section anchor #N
+        # bare number in source_raw only → page anchor #pN
+        if sec or src_has_sec:
+            return f"{_METAPHYSICA_BASE}/{file}#{para}"
+        else:
+            return f"{_METAPHYSICA_BASE}/{file}#p{para}"
 
     # ── Baumgarten Initia (Pr) ────────────────────────────────────────────────
     if raw.startswith("Pr"):
@@ -204,8 +254,14 @@ def resolve_source_url(source_raw: str, note_raw: str = "") -> str | None:
 
     # ── Eberhard Theologia (Th) ───────────────────────────────────────────────
     if raw.startswith("Th"):
-        para = sec or _extract_paragraph(raw[2:].strip())
-        return _eberhard_url(para)
+        raw_tail = raw[2:].strip()
+        src_has_sec = bool(re.search(r"§", raw_tail))
+        if sec or src_has_sec:
+            para = sec or _extract_paragraph(raw_tail)
+            return _eberhard_url(para, is_page=False)
+        else:
+            page = _extract_paragraph(raw_tail)
+            return _eberhard_url(page, is_page=True)
 
     # ── Achenwall (J) ─────────────────────────────────────────────────────────
     if raw.startswith("J") and not raw.startswith("J."):
