@@ -3,42 +3,36 @@ kant_sources.py
 ===============
 Resolves Adickes source abbreviations (L, M, Pr, Th, J …) to:
   - a human-readable full title
-  - a direct URL into the digitized source text on korpora.org,
-    with a §-level anchor where the section number is known
+  - a direct URL into the anchor-injected source texts hosted on GitHub Pages
 
-All digitized source texts live at https://korpora.org/kant/
+All source texts are hosted at SOURCE_BASE with the same directory
+structure as korpora.org:
 
-Supported sources
------------------
-L    Georg Friedrich Meier, Auszug aus der Vernunftlehre, Halle 1752.
-     Single HTML page; §§ addressed as #N anchors.
-     URL: https://korpora.org/kant/meier/
+    SOURCE_BASE/meier/vernunftlehre_1.html    §§ 1–284
+    SOURCE_BASE/meier/vernunftlehre_2.html    §§ 285–563
+    SOURCE_BASE/eberhard/eberhard.html
+    SOURCE_BASE/agb-metaphysica/II1Ba.html    (and the other 8 files)
+    SOURCE_BASE/agb-initia/index.html
+    SOURCE_BASE/achenwall/achenwall_2.html    §§ 85–208
+    SOURCE_BASE/achenwall/achenwall_3.html    §§ 209–288
 
-M    Alexander Gottlieb Baumgarten, Metaphysica, Ed. IV, 1757.
-     Split across 8 HTML files by section; §§ addressed as #N anchors.
-     URL: https://korpora.org/kant/agb-metaphysica/<file>.html#N
+Each file has two anchor types (added by inject_anchors.py):
+    #N   — section anchor  (§ number)
+    #pN  — page anchor     (page number in Kant's copy)
 
-Pr   Alexander Gottlieb Baumgarten, Initia Philosophiae Practicae, 1760.
-     Single HTML page; §§ addressed as #N anchors.
-     URL: https://korpora.org/kant/agb-initia/index.html#N
-
-Th   Johan August Eberhard, Vorbereitung zur natürlichen Theologie, 1781.
-     Single HTML page; §§ addressed as #N anchors.
-     URL: https://korpora.org/kant/eberhard/eberhard.html#N
-
-J    Gottfried Achenwall, Juris naturalis pars posterior, 1763.
-     Two HTML files split at §85; §§ addressed as #N anchors.
-     URL: https://korpora.org/kant/achenwall/achenwall_1.html#N  (§§ 1–84)
-          https://korpora.org/kant/achenwall/achenwall_2.html#N  (§§ 85+)
+source_raw comes from the provenienzen tables and contains the page number
+in Kant's copy (e.g. "L 18").  note_raw contains the § reference when known
+(e.g. "Neben L §. 66-68").  The resolver prefers the § number from note_raw
+for a section anchor, and falls back to the page number for a page anchor.
 
 Usage
 -----
-    from kant_sources import resolve_source_url, SOURCE_FULL_TITLES
+    from kant_sources import resolve_source_url, full_title
 
-    url   = resolve_source_url("M §. 7")        # → ...agb-metaphysica/II1Ba.html#7
-    url   = resolve_source_url("L 1")            # → ...meier/#1
-    url   = resolve_source_url("Th")             # → ...eberhard/eberhard.html  (no §)
-    title = SOURCE_FULL_TITLES["M"]
+    url   = resolve_source_url("L 18", "Neben L §. 66-68")  # → meier/...#66
+    url   = resolve_source_url("M 196", "Neben M §. 554")   # → agb-metaphysica/...#554
+    url   = resolve_source_url("L 18")                       # → meier/...#p18
+    title = full_title("M 196")
 """
 
 import re
@@ -51,232 +45,169 @@ SOURCE_FULL_TITLES: dict[str, str] = {
     "Pr":  "Alexander Gottlieb Baumgarten: Initia Philosophiae Practicae Primae (Halle, 1760)",
     "Th":  "Johan August Eberhard: Vorbereitung zur natürlichen Theologie (Halle, 1781)",
     "J":   "Gottfried Achenwall: Juris naturalis pars posterior, Ed. V (Göttingen, 1763)",
-    "B":   "Immanuel Kant: Beobachtungen über das Gefühl des Schönen und Erhabenen "
-           "(Handexemplar, 1764) — not digitized online",
-    "R V": "Immanuel Kant: Kritik der reinen Vernunft (Handexemplar) — not digitized online",
+    "B":   "Immanuel Kant: Beobachtungen über das Gefühl des Schönen und Erhabenen (Handexemplar, 1764)",
+    "R V": "Immanuel Kant: Kritik der reinen Vernunft (Handexemplar)",
 }
 
-# ── Base URLs ──────────────────────────────────────────────────────────────────
+# ── Base URL ───────────────────────────────────────────────────────────────────
+# All anchor-injected source texts are served from this root.
+# Override by setting SOURCE_BASE before calling resolve_source_url().
 
-_KORPORA = "https://korpora.org/kant"
+SOURCE_BASE = "https://noamhoffer.github.io/kant-sources"
 
-# Meier and Eberhard are single-page HTML files with no native §-anchors.
-# We host anchor-injected versions on GitHub Pages (see inject_anchors.py).
-# Set these to your GitHub Pages URLs once deployed; §-level deep links
-# (e.g. meier.html#40) will then work automatically.
-# Leave as None to fall back to the korpora.org page-level link.
-# Meier: two files — vernunftlehre_1.html §§ 1–284, vernunftlehre_2.html §§ 285–563
-# Eberhard: two files — same split structure (check actual § range once hosted)
-# Set these to your GitHub Pages base URL (directory, no trailing slash).
-# The resolver will append /vernunftlehre_1.html or /vernunftlehre_2.html automatically.
-MEIER_BASE    = "https://noamhoffer.github.io/kant-sources/meier"
-EBERHARD_BASE = "https://noamhoffer.github.io/kant-sources/eberhard"
+# ── Meier: two-file split ──────────────────────────────────────────────────────
+# vernunftlehre_1.html covers §§ 1–284, vernunftlehre_2.html covers §§ 285–563.
+_MEIER_SPLIT = 285
 
-# § boundary between file 1 and file 2 for Meier and Eberhard.
-# Meier: vernunftlehre_1 ends at §284, vernunftlehre_2 starts at §285.
-# Eberhard: update this once you check vernunftlehre_2 first §.
-_MEIER_SPLIT    = 285
-_EBERHARD_SPLIT = 285   # update after checking eberhard/vernunftlehre_2.html
-
-_BASE: dict[str, str] = {
-    "Pr": f"{_KORPORA}/agb-initia/index.html",
-}
-
-
-def _two_file_url(base: str, split: int,
-                  paragraph: int | None, is_page: bool = False) -> str:
-    """
-    Build a URL into a two-file source text (Meier or Eberhard).
-
-    If paragraph is a § number → #N anchor (section).
-    If paragraph is a page number (is_page=True) → #pN anchor (page).
-    File selection: §§/pages below split → file 1, otherwise → file 2.
-    """
-    if not base:
-        return f"{_KORPORA}/meier/"   # fallback if not configured
-    if paragraph is None:
-        return f"{base}/vernunftlehre_1.html"
-    file = "vernunftlehre_1.html" if paragraph < split else "vernunftlehre_2.html"
-    anchor = f"p{paragraph}" if is_page else str(paragraph)
-    return f"{base}/{file}#{anchor}"
-
-
-def _meier_url(paragraph: int | None, is_page: bool = False) -> str:
-    return _two_file_url(MEIER_BASE, _MEIER_SPLIT, paragraph, is_page)
-
-
-def _eberhard_url(paragraph: int | None, is_page: bool = False) -> str:
-    """Build a URL into the single-file Eberhard text."""
-    if not EBERHARD_URL:
-        return f"{_KORPORA}/eberhard/eberhard.html"  # fallback if not configured
-    if paragraph is None:
-        return EBERHARD_URL
-    anchor = f"p{paragraph}" if is_page else str(paragraph)
-    return f"{EBERHARD_URL}#{anchor}"
+# ── Eberhard: single file ──────────────────────────────────────────────────────
+# eberhard.html contains §§ 1–74.
 
 # ── Baumgarten Metaphysica: § → HTML file mapping ─────────────────────────────
-#
-# Derived from the Synopsis (korpora.org/kant/agb-metaphysica/synopsis.html)
-# and confirmed from the Index anchor URLs.
-#
-# Format: list of (max_paragraph, filename) in ascending order.
-# resolve_metaphysica_file() walks these in order and returns the first entry
-# whose max_paragraph >= requested §.
-
 _METAPHYSICA_SECTIONS: list[tuple[int, str]] = [
-    (3,   "I.html"),        # Prolegomena metaphysica §§ 1–3
-    (6,   "II1A.html"),     # Ontologia: prolegomena §§ 4–6
-    (264, "II1Ba.html"),    # Ontologia: praedicata interna §§ 7–264
-    (350, "II1Bb.html"),    # Ontologia: praedicata externa §§ 265–350
-    (480, "II2.html"),      # Cosmologia §§ 351–480
-    (503, "II3A.html"),     # Psychologia: prolegomena §§ 481–503
-    (739, "II3Ba.html"),    # Psychologia: empirica §§ 504–739
-    (799, "II3Bb.html"),    # Psychologia: rationalis §§ 740–799
-    (999, "II4.html"),      # Theologia naturalis §§ 800–end
+    (3,   "I.html"),
+    (6,   "II1A.html"),
+    (264, "II1Ba.html"),
+    (350, "II1Bb.html"),
+    (480, "II2.html"),
+    (503, "II3A.html"),
+    (739, "II3Ba.html"),
+    (799, "II3Bb.html"),
+    (999, "II4.html"),
 ]
 
-_METAPHYSICA_BASE = f"{_KORPORA}/agb-metaphysica"
-
+# Page number → HTML file mapping (from inject_anchors.py output)
+_METAPHYSICA_PAGES: list[tuple[int, str]] = [
+    (2,   "I.html"),        # p1–p2
+    (79,  "II1Ba.html"),    # p3–p79
+    (110, "II1Bb.html"),    # p80–p110
+    (173, "II2.html"),      # p111–p173
+    (292, "II3Ba.html"),    # p174–p292
+    (329, "II3Bb.html"),    # p293–p329
+    (406, "II4.html"),      # p330–p406
+]
 
 def _metaphysica_file(paragraph: int) -> str:
-    """Return the HTML filename for a given Metaphysica § number."""
     for max_p, filename in _METAPHYSICA_SECTIONS:
         if paragraph <= max_p:
             return filename
-    return "II4.html"  # fallback: last section
+    return "II4.html"
 
+def _metaphysica_page_file(page: int) -> str:
+    for max_p, filename in _METAPHYSICA_PAGES:
+        if page <= max_p:
+            return filename
+    return "II4.html"
 
-# ── Achenwall: two-file split ──────────────────────────────────────────────────
-#
-# achenwall_1.html covers the earlier paragraphs (Ius Familiae, beginning of
-# Ius Publicum).  The split occurs around §85 based on the section heading
-# "IURIS NATURALIS Liber III" opening achenwall_2.html at §85.
+# ── Achenwall: three-file split ────────────────────────────────────────────────
+# achenwall_1.html = table of contents (skipped)
+# achenwall_2.html = §§ 85–208
+# achenwall_3.html = §§ 209–288
+_ACHENWALL_SPLIT = 209   # §§ < 209 → file 2; §§ ≥ 209 → file 3
 
-_ACHENWALL_SPLIT = 85   # §§ < 85 → file 1; §§ ≥ 85 → file 2
-
-def _achenwall_url(paragraph: int | None) -> str:
-    base = f"{_KORPORA}/achenwall"
-    if paragraph is None:
-        return f"{base}/achenwall_1.html"
-    file = "achenwall_1.html" if paragraph < _ACHENWALL_SPLIT else "achenwall_2.html"
-    return f"{base}/{file}#{paragraph}"
-
+def _achenwall_file(paragraph: int) -> str:
+    return "achenwall_3.html" if paragraph >= _ACHENWALL_SPLIT else "achenwall_2.html"
 
 # ── Paragraph extraction ───────────────────────────────────────────────────────
-#
-# source_raw examples we must handle:
-#   "L 1"           §1 of Meier
-#   "L §. 1"        same, explicit §
-#   "L §. 1--3"     range: link to first §
-#   "M §. 7"        §7 of Metaphysica
-#   "M §. 350"      §350
-#   "Pr §. 1"       §1 of Initia
-#   "Th §. 12"      §12 of Theologia
-#   "J §. 85"       §85 of Achenwall
-#   "L Bl."         loose leaf, no § — return base URL only
-#   "Ms."           manuscript, no URL
-#   "M"             no § given — return base URL only
 
 _PARA_RE = re.compile(
-    r"§\.?\s*(\d+)"      # explicit § sign followed by number
+    r"§\.?\s*(\d+)"   # explicit § sign followed by number
     r"|"
-    r"\b(\d+)\b"         # bare number (Meier-style: "L 1")
+    r"\b(\d+)\b"      # bare number (page reference)
 )
 
-
-def _extract_paragraph(after_abbr: str) -> int | None:
-    """
-    Extract the first paragraph/section number from the part of source_raw
-    that follows the abbreviation.  Returns None if none found.
-    """
-    m = _PARA_RE.search(after_abbr)
-    if m:
-        return int(m.group(1) or m.group(2))
-    return None
+def _extract_paragraph(text: str) -> int | None:
+    m = _PARA_RE.search(text)
+    return int(m.group(1) or m.group(2)) if m else None
 
 
 # ── Main resolver ──────────────────────────────────────────────────────────────
 
 def resolve_source_url(source_raw: str, note_raw: str = "") -> str | None:
     """
-    Return a §-level URL into the digitized source text, or None.
+    Return a URL into the hosted source text, or None.
 
-    The §-number is extracted preferentially from note_raw, because source_raw
-    often contains a *physical page* in Kant's copy (e.g. "L 18" = page 18),
-    while note_raw contains the *section reference* (e.g. "Neben L §. 66-68").
-
-    Parameters
-    ----------
-    source_raw : str   e.g. "L 18",  "M §. 7",  "Pr §. 12"
-    note_raw   : str   e.g. "Neben L §. 66-68",  "Zu M §. 398",  "" (absent)
+    § number from note_raw → section anchor #N
+    Bare page number from source_raw → page anchor #pN
     """
     if not source_raw:
         return None
 
     raw = source_raw.strip()
 
-    # §-number from note_raw takes priority over the number in source_raw
+    # §-number from note_raw takes priority
     sec = _extract_paragraph(note_raw) if note_raw else None
 
-    # ── Meier (L) ──────────────────────────────────────────────────────────────
-    if raw.startswith("L") and not raw.startswith("L Bl"):
-        raw_tail = raw[1:].strip()
-        src_has_sec = bool(re.search(r"§", raw_tail))
-        if sec or src_has_sec:
-            # § from note_raw or source_raw → section anchor #N
-            para = sec or _extract_paragraph(raw_tail)
-            return _meier_url(para, is_page=False)
-        else:
-            # Bare page number in source_raw → page anchor #pN
-            page = _extract_paragraph(raw_tail)
-            return _meier_url(page, is_page=True)
+    def has_sec(tail: str) -> bool:
+        return bool(re.search(r"§", tail))
 
-    # ── Baumgarten Metaphysica (M) ─────────────────────────────────────────────
-    if raw.startswith("M") and not raw.startswith("Ms"):
-        raw_tail = raw[1:].strip()
-        src_has_sec = bool(re.search(r"§", raw_tail))
-        para = sec or _extract_paragraph(raw_tail)
+    # ── Meier (L) ─────────────────────────────────────────────────────────────
+    if raw.startswith("L") and not raw.startswith("L Bl"):
+        tail = raw[1:].strip()
+        para = sec or _extract_paragraph(tail)
         if para is None:
-            return f"{_METAPHYSICA_BASE}/I.html"
-        file = _metaphysica_file(para)
-        # § in note_raw or in source_raw → section anchor #N
-        # bare number in source_raw only → page anchor #pN
-        if sec or src_has_sec:
-            return f"{_METAPHYSICA_BASE}/{file}#{para}"
+            return f"{SOURCE_BASE}/meier/vernunftlehre_1.html"
+        file   = "vernunftlehre_1.html" if para < _MEIER_SPLIT else "vernunftlehre_2.html"
+        anchor = str(para) if (sec or has_sec(tail)) else f"p{para}"
+        return f"{SOURCE_BASE}/meier/{file}#{anchor}"
+
+    # ── Baumgarten Metaphysica (M) ────────────────────────────────────────────
+    if raw.startswith("M") and not raw.startswith("Ms"):
+        tail = raw[1:].strip()
+        para = sec or _extract_paragraph(tail)
+        if para is None:
+            return f"{SOURCE_BASE}/agb-metaphysica/I.html"
+        if sec or has_sec(tail):
+            # § number → section anchor, use § → file mapping
+            file = _metaphysica_file(para)
+            return f"{SOURCE_BASE}/agb-metaphysica/{file}#{para}"
         else:
-            return f"{_METAPHYSICA_BASE}/{file}#p{para}"
+            # Page number → page anchor, use page → file mapping
+            file = _metaphysica_page_file(para)
+            return f"{SOURCE_BASE}/agb-metaphysica/{file}#p{para}"
 
     # ── Baumgarten Initia (Pr) ────────────────────────────────────────────────
     if raw.startswith("Pr"):
-        para = sec or _extract_paragraph(raw[2:].strip())
-        base = _BASE["Pr"]
-        return f"{base}#{para}" if para else base
+        tail = raw[2:].strip()
+        para = sec or _extract_paragraph(tail)
+        base = f"{SOURCE_BASE}/agb-initia/index.html"
+        anchor = str(para) if (sec or has_sec(tail)) else f"p{para}"
+        return f"{base}#{anchor}" if para else base
 
-    # ── Eberhard Theologia (Th) ───────────────────────────────────────────────
+    # ── Eberhard (Th) ─────────────────────────────────────────────────────────
     if raw.startswith("Th"):
-        raw_tail = raw[2:].strip()
-        src_has_sec = bool(re.search(r"§", raw_tail))
-        if sec or src_has_sec:
-            para = sec or _extract_paragraph(raw_tail)
-            return _eberhard_url(para, is_page=False)
-        else:
-            page = _extract_paragraph(raw_tail)
-            return _eberhard_url(page, is_page=True)
+        tail = raw[2:].strip()
+        para = sec or _extract_paragraph(tail)
+        base = f"{SOURCE_BASE}/eberhard/eberhard.html"
+        anchor = str(para) if (sec or has_sec(tail)) else f"p{para}"
+        return f"{base}#{anchor}" if para else base
 
     # ── Achenwall (J) ─────────────────────────────────────────────────────────
     if raw.startswith("J") and not raw.startswith("J."):
-        para = sec or _extract_paragraph(raw[1:].strip())
-        return _achenwall_url(para)
+        tail = raw[1:].strip()
+        para = sec or _extract_paragraph(tail)
+        if para is None:
+            return f"{SOURCE_BASE}/achenwall/achenwall_2.html"
+        file   = _achenwall_file(para)
+        anchor = str(para) if (sec or has_sec(tail)) else f"p{para}"
+        return f"{SOURCE_BASE}/achenwall/{file}#{anchor}"
 
-    # ── Sources not available online ──────────────────────────────────────────
-    # B (Beobachtungen Handexemplar), R V (KrV Handexemplar), Ms., L Bl., etc.
+    # ── No online text (B, R V, L Bl., Ms., Brief, etc.) ─────────────────────
     return None
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
 def source_abbr(source_raw: str) -> str | None:
-    """Extract the leading abbreviation from a source_raw string."""
+    """Extract the leading abbreviation from a source_raw string.
+    Returns None for expanded strings like 'Loses Blatt' or 'Manuscript'
+    since those don't map to a digitized source text.
+    """
+    s = source_raw.strip()
+    # Reject already-expanded forms so they don't false-match "L" or "M"
+    if s.startswith(("Loses Blatt", "Manuscript")):
+        return None
     for abbr in ("R V", "L Bl", "Pr", "Th", "Ms", "L", "M", "J", "B"):
-        if source_raw.startswith(abbr):
+        if s.startswith(abbr):
             return abbr
     return None
 

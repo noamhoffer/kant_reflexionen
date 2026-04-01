@@ -113,6 +113,7 @@ class ReflexionDetail(ReflexionSummary):
     text_html:  Optional[str]
     url_start:  Optional[str]
     source_url: Optional[str]
+    brief_url:  Optional[str]
 
 
 class SearchResponse(BaseModel):
@@ -163,6 +164,8 @@ def _row_to_detail(row: sqlite3.Row) -> ReflexionDetail:
         src_url = resolve_source_url(row["source_raw"] or "")
     cols = [d[0] for d in row.description] if hasattr(row, "description") else row.keys()
     html_text = row["text_html"] if "text_html" in cols else None
+    cols = row.keys()
+    brief_url = row["brief_url"] if "brief_url" in cols else None
     return ReflexionDetail(
         number      = row["number"],
         volume      = row["volume"],
@@ -179,6 +182,7 @@ def _row_to_detail(row: sqlite3.Row) -> ReflexionDetail:
         text_html   = html_text,
         url_start   = row["url_start"],
         source_url  = src_url,
+        brief_url   = brief_url,
     )
 
 
@@ -228,7 +232,7 @@ def search(
     source:    Optional[str] = Query(None,  description="Source abbreviation prefix, e.g. 'L', 'M'"),
     date_from: Optional[int] = Query(None,  description="Earliest year"),
     date_to:   Optional[int] = Query(None,  description="Latest year"),
-    volume:    list[int]     = Query([],    description="AA volume number(s); repeat for multiple"),
+    volume:    list[int]      = Query([],   description="AA volume number(s); repeat for multiple"),
     page:      int           = Query(1,     description="Page number (1-based)", ge=1),
     page_size: int           = Query(20,    description="Results per page (max 100)", ge=1, le=100),
 ):
@@ -270,9 +274,14 @@ def search(
     ).fetchone()[0]
 
     limit, offset = _paginate(page, page_size)
+    # Default: AA sequence order (volume, then page within volume).
+    # When a date filter is active: chronological, NULLs last.
+    date_filtered = date_from is not None or date_to is not None
+    order = "date_from NULLS LAST, volume, page_start" if date_filtered             else "volume, page_start, CAST(number AS INTEGER)"
+
     rows = con.execute(
         f"""SELECT * FROM reflexionen {where_clause}
-            ORDER BY date_from, rowid
+            ORDER BY {order}
             LIMIT ? OFFSET ?""",
         params + [limit, offset],
     ).fetchall()

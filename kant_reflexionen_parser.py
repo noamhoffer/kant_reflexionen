@@ -68,6 +68,7 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 from kant_sources import resolve_source_url
+from kant_provenienzen import load_provenienzen
 
 
 # ── Volume page ranges ─────────────────────────────────────────────────────────
@@ -82,6 +83,11 @@ VOLUME_RANGES = {
 }
 
 BASE_URL   = "https://www.korpora.org/Kant"
+
+# ── Provenienzen lookup table ─────────────────────────────────────────────────
+# Populated at startup from the korpora.org Provenienzen HTML tables.
+# Maps Adickes number → {source_raw, note_raw, url_start, source_url, brief_url}
+PROVENIENZEN: dict = {}
 USER_AGENT = "KantReflexionenBot/1.0 (research; contact: researcher@example.com)"
 
 SESSION = requests.Session()
@@ -92,9 +98,6 @@ SESSION.headers.update({"User-Agent": USER_AGENT})
 # ── Adickes dating phases → year ranges ───────────────────────────────────────
 # Source: https://www.korpora.org/Kant/nachlass-a.html
 # Each entry is (date_from, date_to) as integers.
-# Where Adickes gives "etwa" (approximately) or overlapping ranges we use his
-# stated endpoints directly; the raw string is always preserved for scholars
-# who want to apply their own interpretation.
 
 PHASE_YEARS: dict[str, tuple[int, int]] = {
     "α1": (1753, 1754),
@@ -103,7 +106,7 @@ PHASE_YEARS: dict[str, tuple[int, int]] = {
     "β2": (1758, 1759),
     "γ":  (1760, 1764),
     "δ":  (1762, 1763),
-    "ε":  (1762, 1764),   # "sicher vor ζ, Verhältnis zu δ nicht sicher" → same window
+    "ε":  (1762, 1764),
     "ζ":  (1764, 1766),
     "η":  (1764, 1768),
     "θ":  (1766, 1768),
@@ -113,10 +116,10 @@ PHASE_YEARS: dict[str, tuple[int, int]] = {
     "μ":  (1770, 1771),
     "ν":  (1771, 1771),
     "ξ":  (1772, 1772),
-    "ο":  (1769, 1772),   # "sicher früher als υ und φ, später als κ – ν"
-    "π":  (1772, 1775),   # "wahrscheinlich zwischen ξ und ρ"
+    "ο":  (1769, 1772),
+    "π":  (1772, 1775),
     "ρ":  (1773, 1775),
-    "σ":  (1774, 1777),   # "etwa 1775–1777, may extend to 1774"
+    "σ":  (1774, 1777),
     "τ":  (1775, 1776),
     "υ":  (1776, 1778),
     "φ":  (1776, 1778),
@@ -132,103 +135,282 @@ PHASE_YEARS: dict[str, tuple[int, int]] = {
     "ω5": (1798, 1804),
 }
 
-# Ordered list of phase keys for range expansion (β1--ε2 means every phase
-# between β1 and ε2 in this sequence, inclusive).
+# Bare-letter fallback ranges (when no superscript digit is present)
+_BARE_PHASE_YEARS: dict[str, tuple[int, int]] = {
+    "α": (1753, 1755),
+    "β": (1752, 1759),
+    "ψ": (1780, 1789),
+    "ω": (1790, 1804),
+}
+
 PHASE_ORDER: list[str] = list(PHASE_YEARS.keys())
 
-# Regex that matches a single phase token anywhere in a dating string.
-# An optional space between letter and digit is allowed (e.g. "β 1" = β1).
+# Superscript digit → ASCII digit
+_SUP_DIGIT = str.maketrans("¹²³⁴⁵⁶⁷⁸⁹⁰", "1234567890")
+
+# Greek letters used in Adickes phases
+_GREEK = "αβγδεζηθικλμνξοπρστυφχψως"  # ς = final sigma variant
+
+# Regex for a single phase token: Greek letter + optional superscript digit(s)
+# handles both ASCII digits (β1) and Unicode superscript (ω¹)
 _PHASE_TOKEN_RE = re.compile(
-    r"[αβγδεζηθικλμνξοπρστυφχψω]"   # Greek letter
-    r"\s?"                            # optional space (e.g. "β 1")
-    r"[1-5]?"                         # optional digit suffix
+    rf"([{_GREEK}])"          # Greek letter
+    r"([¹²³⁴⁵]|\d)?"         # optional superscript or ASCII digit suffix
 )
 
+# Regex for a phase range written with superscripts: ω³⁻⁴  or  ω¹⁻²
+_SUP_RANGE_RE = re.compile(
+    rf"([{_GREEK}])"          # Greek letter (same for both ends)
+    r"([¹²³⁴⁵]|\d)"          # start superscript
+    r"[⁻\-–—]"               # dash separator
+    r"([¹²³⁴⁵]|\d)"          # end superscript
+)
 
-def _token_to_phase(tok: str) -> "str | None":
-    """Normalise a raw token like 'α2', 'β 1', 'ψ' to its PHASE_YEARS key."""
-    tok = tok.strip().replace(" ", "")   # collapse "β 1" → "β1"
-    if tok in PHASE_YEARS:
-        return tok
-    # Handle bare letter whose digit was not captured (e.g. token "β" when "β1" exists)
-    if tok and tok[-1].isdigit() and tok[:-1] in PHASE_YEARS:
-        return tok[:-1]
-    if tok in PHASE_YEARS:
-        return tok
+# Regex for explicit year in parentheses: (1790), (1793—4), (Nov. 1797), ω(1800)
+_PAREN_YEAR_RE = re.compile(
+    r"\s?\(\s*"
+    r"(?:um\s+|[A-Za-zäöüÄÖÜ]+\.?\s+(?:[A-Za-z]+\.?\s+)?)?"
+    r"(1[678]\d\d)"
+    r"(?:\s*[\u2014\u2013\-–]\s*(\d{1,4}))?"
+    r"\s*\)"
+)
+
+# Regex for bare year ranges like "1788—91" or "1788—1790"
+_BARE_YEAR_RANGE_RE = re.compile(
+    r"(1[678]\d\d)\s*[\u2014\u2013\-]\s*(\d{1,4})"
+)
+
+# Regex for decade strings like "60er Jahre", "70er — 80er Jahre"
+_DECADE_RE = re.compile(r"(\d0)er")
+
+
+def _normalise_digit(ch: str) -> str:
+    """Convert superscript digit to ASCII ('¹' → '1')."""
+    return ch.translate(_SUP_DIGIT).strip()
+
+
+def _token_to_phase(letter: str, digit_ch: str | None) -> "str | None":
+    """Resolve a (letter, optional-digit-char) pair to a PHASE_YEARS key.
+    Returns the bare letter for ψ/ω/α/β even if not in PHASE_YEARS,
+    so that _phase_range can use _BARE_FIRST/_BARE_LAST for range expansion.
+    Isolated bare-letter tokens (step 7) will return None here and fall
+    through to step 8 (_BARE_PHASE_YEARS) for the correct full range.
+    """
+    # Normalise final sigma ς → σ (same Adickes phase)
+    letter = "σ" if letter == "ς" else letter
+    if digit_ch:
+        d = _normalise_digit(digit_ch)
+        key = letter + d
+        if key in PHASE_YEARS:
+            return key
+    # Key for use in _phase_range (bare letter)
+    if letter in PHASE_YEARS or letter in _BARE_PHASE_YEARS:
+        return letter
     return None
 
 
-def _expand_range(start_tok: str, end_tok: str) -> list:
+_BARE_FIRST = {"α": "α1", "β": "β1", "ψ": "ψ1", "ω": "ω1"}
+_BARE_LAST  = {"α": "α2", "β": "β2", "ψ": "ψ4", "ω": "ω5"}
+
+def _phase_range(key1: str, key2: str) -> list[str]:
+    """Return all phase keys between key1 and key2 in PHASE_ORDER, inclusive.
+    Bare-letter endpoints are expanded: ψ as start → ψ1, ψ as end → ψ4.
     """
-    Return all phase keys between start_tok and end_tok in PHASE_ORDER,
-    inclusive.  If either token is unknown, return just the known endpoints.
-    """
-    s = _token_to_phase(start_tok)
-    e = _token_to_phase(end_tok)
-    if s is None or e is None:
-        return [p for p in (s, e) if p]
+    k1 = _BARE_FIRST.get(key1, key1)
+    k2 = _BARE_LAST.get(key2, key2)
     try:
-        i, j = PHASE_ORDER.index(s), PHASE_ORDER.index(e)
+        i, j = PHASE_ORDER.index(k1), PHASE_ORDER.index(k2)
     except ValueError:
-        return [p for p in (s, e) if p]
+        return [k for k in (k1, k2) if k in PHASE_YEARS]
     if i > j:
         i, j = j, i
     return PHASE_ORDER[i: j + 1]
 
 
-def parse_dating(raw: str) -> "tuple[int | None, int | None]":
+def _year_range_from_phases(phases: list[str]) -> "tuple[int|None, int|None]":
+    _all = {**PHASE_YEARS, **_BARE_PHASE_YEARS}
+    years_from = [_all[p][0] for p in phases if p in _all]
+    years_to   = [_all[p][1] for p in phases if p in _all]
+    if not years_from:
+        return None, None
+    return min(years_from), max(years_to)
+
+
+def _expand_year(year_str: str, anchor: int) -> int:
     """
-    Derive (date_from, date_to) from an Adickes dating string.
+    Expand a possibly-abbreviated year relative to an anchor.
+    '4'  with anchor 1793 → 1794  (same decade)
+    '94' with anchor 1793 → 1794  (same century)
+    '1794' → 1794  (already full)
+    """
+    y = int(year_str)
+    if y >= 1000:
+        return y
+    if y < 10:
+        return (anchor // 10) * 10 + y   # same decade
+    return (anchor // 100) * 100 + y      # same century
 
-    The function collects *all* phase tokens mentioned in the string —
-    including uncertain ones (marked with ? or ??) and parenthesised
-    alternatives — and returns the union of their year ranges.
 
-    Examples
-    --------
-    "alpha2"         -> (1754, 1755)
-    "beta1--epsilon" -> (1752, 1764)   all phases beta1 ... epsilon
-    "kappa -- xi"    -> (1769, 1772)
-    "mu ? nu ?"      -> (1770, 1771)
-    "mu ? nu ? (kappa ? rho ?)" -> (1769, 1775)
-    ""               -> (None, None)
+def _extract_year_from_text(text: str) -> "int | None":
+    """Extract the first 4-digit year from a free-text string (for letter dates)."""
+    m = re.search(r"\b(1[678]\d\d)\b", text)
+    return int(m.group(1)) if m else None
+
+
+def parse_dating(
+    raw: str,
+    note_raw: str = "",
+    source_raw: str = "",
+) -> "tuple[int | None, int | None]":
+    """
+    Derive (date_from, date_to) from an Adickes dating string plus optional
+    supplementary context (note_raw, source_raw — used for letter dates).
+
+    Priority order
+    --------------
+    1. Exact year in parentheses inside raw:  ω¹ (1790)  → 1790
+    2. Date extracted from a linked letter in note_raw/source_raw (year only)
+    3. Bare year range in raw:  1788—91  → (1788, 1791)
+    4. Decade string in raw:  60er Jahre  → (1760, 1769)
+    5. Phase range with shared letter + superscript dash:  ω³⁻⁴ → ω3..ω4
+    6. Explicit dashed phase range:  ρ—σ
+    7. All individual phase tokens (union of their ranges)
+    8. Bare-letter fallback:  ψ → (1780, 1789)
     """
     if not raw or not raw.strip():
         return None, None
 
-    phases: list = []
+    raw_s = raw.strip()
 
-    # Step 1: expand explicit ranges written as "X--Y" or "X -- Y"
-    range_re = re.compile(
-        r"([αβγδεζηθικλμνξοπρστυφχψω]\s?[1-5]?)"   # start token (e.g. β1 or β 1)
-        r"\s*-{1,2}\s*"                              # single or double dash
-        r"([αβγδεζηθικλμνξοπρστυφχψω]\s?[1-5]?)"   # end token
-    )
-    consumed_spans: list = []
-    for m in range_re.finditer(raw):
-        phases.extend(_expand_range(m.group(1), m.group(2)))
-        consumed_spans.append((m.start(), m.end()))
+    # ── 1. Exact year in parentheses ─────────────────────────────────────────
+    # A year in parentheses means Adickes is providing the definitive date,
+    # overriding the phase range. Return it directly.
+    paren_m = _PAREN_YEAR_RE.search(raw_s)
+    if paren_m:
+        y_from = int(paren_m.group(1))
+        y_to   = _expand_year(paren_m.group(2), y_from) if paren_m.group(2) else y_from
+        return y_from, y_to
 
-    # Step 2: pick up all remaining isolated tokens
-    for m in _PHASE_TOKEN_RE.finditer(raw):
-        if any(s <= m.start() < e for s, e in consumed_spans):
+    # ── 2. Letter date from note_raw or source_raw ────────────────────────────
+    # Used when the reflexion is written ON a dated letter.
+    # note_raw example: "Bemerkung Kants auf dem Brief ... vom 7. Febr. 1784"
+    for field in (note_raw, source_raw):
+        if not field:
             continue
-        p = _token_to_phase(m.group())
-        if p:
-            phases.append(p)
+        if any(kw in field for kw in ("Brief", "Letter", "letter")):
+            y = _extract_year_from_text(field)
+            if y:
+                return y, y
 
-    if not phases:
-        return None, None
+    # ── 3. Bare year range in raw: 1788—91 or 1788—1790 ─────────────────────
+    yr_m = _BARE_YEAR_RANGE_RE.search(raw_s)
+    if yr_m:
+        y1 = int(yr_m.group(1))
+        y2 = _expand_year(yr_m.group(2), y1)
+        return min(y1, y2), max(y1, y2)
 
-    years_from = [PHASE_YEARS[p][0] for p in phases if p in PHASE_YEARS]
-    years_to   = [PHASE_YEARS[p][1] for p in phases if p in PHASE_YEARS]
+    # Check for bare single year with no phase code
+    bare_yr = re.fullmatch(r"\s*(1[678]\d\d)\s*", raw_s)
+    if bare_yr:
+        y = int(bare_yr.group(1))
+        return y, y
 
-    if not years_from:
-        return None, None
+    # ── 4. Decade strings ─────────────────────────────────────────────────────
+    # Collect all decade values including both sides of "60-70er"
+    decades = re.findall(r"(\d0)er", raw_s)  # "70er" from "60-70er" and "70er"
+    decades += re.findall(r"(\d0)[-–\u2013\u2014]\d0er", raw_s)  # "60" from "60-70er"
+    if decades and not any(c in raw_s for c in _GREEK):
+        years = [1700 + int(d) for d in decades]
+        return min(years), max(years) + 9
 
-    return min(years_from), max(years_to)
+    # From here we work with Greek phase codes.
 
-# ── HTML parsing — NOTIZ-comment-based ───────────────────────────────────────
+    # ── 5. Superscript range on shared letter: ω³⁻⁴  ω¹⁻² ─────────────────
+    phases: list[str] = []
+    consumed: list[tuple[int, int]] = []
+    for m in _SUP_RANGE_RE.finditer(raw_s):
+        letter = m.group(1)
+        k1 = _token_to_phase(letter, m.group(2))
+        k2 = _token_to_phase(letter, m.group(3))
+        if k1 and k2:
+            phases.extend(_phase_range(k1, k2))
+        consumed.append((m.start(), m.end()))
+
+    # ── 6. Explicit dashed phase range: ρ—σ  or  ρ--σ ───────────────────────
+    _DASH_RANGE_RE = re.compile(
+        rf"([{_GREEK}])([¹²³⁴⁵]|\d)?\s*[—\-–]{{1,2}}\s*([{_GREEK}])([¹²³⁴⁵]|\d)?"
+    )
+    for m in _DASH_RANGE_RE.finditer(raw_s):
+        if any(s <= m.start() < e for s, e in consumed):
+            continue
+        k1 = _token_to_phase(m.group(1), m.group(2))
+        k2 = _token_to_phase(m.group(3), m.group(4))
+        if k1 and k2:
+            phases.extend(_phase_range(k1, k2))
+        consumed.append((m.start(), m.end()))
+
+    # ── 7. Individual phase tokens ────────────────────────────────────────────
+    for m in _PHASE_TOKEN_RE.finditer(raw_s):
+        if any(s <= m.start() < e for s, e in consumed):
+            continue
+        k = _token_to_phase(m.group(1), m.group(2))
+        if k:
+            phases.append(k)
+
+    if phases:
+        return _year_range_from_phases(phases)
+
+    # ── 8. Bare-letter fallback (no superscript digit) ────────────────────────
+    for letter, yr in _BARE_PHASE_YEARS.items():
+        if letter in raw_s:
+            return yr
+
+    return None, None
+
+# ── Source abbreviation expansion ─────────────────────────────────────────────
+# From Adickes, AA 14 Vorwort (summarised in nachlass-a.html).
+# Applied to source_raw before storing in the DB.
+
+SOURCE_ABBR_EXPANSIONS: dict[str, str] = {
+    "L Bl.":  "Loses Blatt",
+    "L Bl":   "Loses Blatt",
+    "L. Bl.": "Loses Blatt",
+    "L. Bl":  "Loses Blatt",
+    "Ms.":    "Manuscript",
+    "Ms":     "Manuscript",
+    "R V":    "Kants Handexemplar der Kritik der reinen Vernunft",
+    "A.M.":   "Altpreußische Monatsschrift",
+}
+
+# Longer, unambiguous expansions that stand alone as source_raw
+_LONG_SOURCE_PREFIXES: dict[str, str] = {
+    "L Bl.":  "Loses Blatt",
+    "L. Bl.": "Loses Blatt",
+    "L Bl":   "Loses Blatt",
+    "L. Bl":  "Loses Blatt",
+}
+
+
+def expand_source_abbr(source_raw: str | None) -> str | None:
+    """
+    Expand leading abbreviations in source_raw so the UI shows readable text.
+
+    Only the prefix is expanded; the rest (e.g. the leaf number) is kept.
+    Examples:
+        "L Bl. A 7"  → "Loses Blatt A 7"
+        "Ms. Zusatz" → "Manuscript Zusatz"
+        "L 18"       → "L 18"   (no change — L alone is the Meier textbook)
+    """
+    if not source_raw:
+        return source_raw
+    s = source_raw.strip()
+    for abbr, expansion in SOURCE_ABBR_EXPANSIONS.items():
+        if s == abbr or s.startswith(abbr + " ") or s.startswith(abbr + "."):
+            rest = s[len(abbr):].lstrip(". ")
+            return (expansion + (" " + rest if rest else "")).strip()
+    return s
+
+
 #
 # The korpora.org HTML embeds machine-readable boundary markers for every
 # reflexion as HTML comments:
@@ -261,8 +443,9 @@ def _clean(s):
 
 def _parse_meta(block_html):
     """
-    Extract (number, dating, source, note) from a reflexion block.
-    Number from <b>, metadata from <a href="nachlass-a">.
+    Extract (number, dating) from a reflexion block.
+    Number from <b>, dating from <a href="nachlass-a">.
+    Source and note come from the provenienzen tables, not from HTML.
     """
     soup = BeautifulSoup(block_html, "lxml")
     bold = soup.find("b")
@@ -272,14 +455,12 @@ def _parse_meta(block_html):
 
     a_tag = soup.find("a", href=re.compile("nachlass-a"))
     if not a_tag:
-        return number, "", "", ""
+        return number, ""
 
     meta  = a_tag.get_text(" ", strip=True)
     parts = [_clean(p) for p in re.split(r"\.?\xa0{2,}", meta)]
     dating = parts[0] if len(parts) > 0 else ""
-    source = parts[1] if len(parts) > 1 else ""
-    note   = _clean(parts[2]).rstrip(":") if len(parts) > 2 else ""
-    return number, dating, source, note
+    return number, dating
 
 
 def _img_tag(img_tag) -> str:
@@ -412,7 +593,7 @@ def parse_page(html):
     Parse one page using NOTIZ boundary comments.
 
     Returns a list of dicts:
-      number, dating, source, note, text, text_html,
+      number, dating, text, text_html,
       continuation (bool), complete (bool)
     """
     results  = []
@@ -427,7 +608,7 @@ def parse_page(html):
         e_pos = next(s for n, k, s, _ in spans if n == num and k == "E")
         _, text_plain = _extract_text(html[:e_pos])
         if text_plain:
-            results.append(dict(number=num, dating="", source="", note="",
+            results.append(dict(number=num, dating="",
                                 text=text_plain, text_html="",
                                 continuation=True, complete=True))
 
@@ -439,11 +620,11 @@ def parse_page(html):
         complete = e_pos is not None
         block    = html[a_end:e_pos] if e_pos else html[a_end:]
 
-        number, dating, source, note = _parse_meta(block)
+        number, dating = _parse_meta(block)
         if not number:
             number = num
         text_html, text_plain = _extract_text(block)
-        results.append(dict(number=number, dating=dating, source=source, note=note,
+        results.append(dict(number=number, dating=dating,
                             text=text_plain, text_html=text_html,
                             continuation=False, complete=complete))
 
@@ -591,7 +772,8 @@ def init_db(path: str) -> sqlite3.Connection:
             text        TEXT,
             text_html   TEXT,
             url_start   TEXT,
-            source_url  TEXT
+            source_url  TEXT,
+            brief_url   TEXT
         )
     """)
     con.execute("""
@@ -628,11 +810,11 @@ def upsert_reflexion(con: sqlite3.Connection, rec: dict):
             """INSERT INTO reflexionen
                (number, volume, page_start, page_end,
                 dating_raw, date_from, date_to,
-                source_raw, note_raw, text, text_html, url_start, source_url)
+                source_raw, note_raw, text, text_html, url_start, source_url, brief_url)
                VALUES
                (:number, :volume, :page_start, :page_end,
                 :dating_raw, :date_from, :date_to,
-                :source_raw, :note_raw, :text, :text_html, :url_start, :source_url)
+                :source_raw, :note_raw, :text, :text_html, :url_start, :source_url, :brief_url)
             """,
             rec,
         )
@@ -655,7 +837,7 @@ def process_page(reflexionen: list[dict], volume: int, page: int, url: str,
     """
     Write the list of reflexion dicts from parse_page() into the database.
 
-    Each dict has: number, dating, source, note, text, text_html,
+    Each dict has: number, dating, text, text_html,
                    continuation (bool), complete (bool).
     """
     for r in reflexionen:
@@ -681,8 +863,30 @@ def process_page(reflexionen: list[dict], volume: int, page: int, url: str,
                 )
             continue
 
-        date_from, date_to = parse_dating(r["dating"])
-        source_url = resolve_source_url(r["source"], r["note"])
+        # Source and location data come exclusively from the provenienzen tables.
+        # Reflexionen not in the table (variant 'a'-suffix numbers, manuscript
+        # sources) have source_raw / note_raw left as None.
+        prov = PROVENIENZEN.get(r["number"])
+        if prov:
+            source_raw = expand_source_abbr(prov["source_raw"])
+            note_raw   = prov["note_raw"]
+            url_start  = prov["url_start"] or url
+            source_url = (prov.get("source_url")
+                          or resolve_source_url(source_raw, note_raw))
+            brief_url  = prov.get("brief_url") or None
+        else:
+            source_raw = None
+            note_raw   = None
+            url_start  = url
+            source_url = None
+            brief_url  = None
+
+        date_from, date_to = parse_dating(
+            r["dating"],
+            note_raw=note_raw or "",
+            source_raw=source_raw or "",
+        )
+
         upsert_reflexion(con, {
             "number":     r["number"],
             "volume":     volume,
@@ -691,12 +895,13 @@ def process_page(reflexionen: list[dict], volume: int, page: int, url: str,
             "dating_raw": r["dating"],
             "date_from":  date_from,
             "date_to":    date_to,
-            "source_raw": r["source"],
-            "note_raw":   r["note"],
+            "source_raw": source_raw,
+            "note_raw":   note_raw,
             "text":       r["text"],
             "text_html":  r["text_html"],
-            "url_start":  url,
+            "url_start":  url_start,
             "source_url": source_url,
+            "brief_url":  brief_url,
         })
 
 
@@ -733,7 +938,26 @@ def main():
         "--resume", action="store_true",
         help="Skip pages already recorded in scrape_progress",
     )
+    ap.add_argument(
+        "--provenienzen", metavar="DIR",
+        default=str(Path(__file__).parent / "provenienzen"),
+        help=(
+            "Path to directory containing L-notizen.html, M-notizen.html etc. "
+            "(default: provenienzen/ next to this script)"
+        ),
+    )
     args = ap.parse_args()
+
+    # Load provenienzen lookup table
+    prov_dir = Path(args.provenienzen)
+    if not prov_dir.exists():
+        print(f"Warning: provenienzen directory not found: {prov_dir} — "
+              f"source_raw/note_raw will be NULL for all reflexionen.",
+              file=sys.stderr)
+    else:
+        global PROVENIENZEN
+        PROVENIENZEN = load_provenienzen(prov_dir)
+        print(f"Loaded {len(PROVENIENZEN)} provenienzen entries from {prov_dir}")
 
     local_root = Path(args.local) if args.local else None
     if local_root is not None and not local_root.exists():

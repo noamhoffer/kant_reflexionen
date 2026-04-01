@@ -118,6 +118,12 @@ def _migrate(con: sqlite3.Connection):
         print("  Migrated DB: added text_html column (will populate on next scrape).",
               flush=True)
 
+    if "brief_url" not in cols:
+        con.execute("ALTER TABLE reflexionen ADD COLUMN brief_url TEXT")
+        con.commit()
+        print("  Migrated DB: added brief_url column (will populate on next scrape).",
+              flush=True)
+
 
 def fetch_one(con: sqlite3.Connection, number: str) -> sqlite3.Row | None:
     return con.execute(
