@@ -864,11 +864,15 @@ def process_page(reflexionen: list[dict], volume: int, page: int, url: str,
             # (page_end == page_start, i.e. hasn't been closed by an -E yet).
             # If number is known (-E page), use it directly.
             if r["number"] is None:
+                # Middle page (no NOTIZ markers): only attach to a reflexion whose
+                # page_end equals page-1, confirming it was open on the immediately
+                # preceding page. This prevents wrongly attaching to an old closed
+                # reflexion when pages are missing from the mirror.
                 row = con.execute(
                     """SELECT number FROM reflexionen
-                       WHERE volume=? AND page_start = page_end
-                       ORDER BY page_start DESC, rowid DESC LIMIT 1""",
-                    (volume,),
+                       WHERE volume=? AND page_end = ?
+                       ORDER BY rowid DESC LIMIT 1""",
+                    (volume, page - 1),
                 ).fetchone()
             else:
                 row = (r["number"],)
