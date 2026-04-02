@@ -1,8 +1,10 @@
-# Kant Reflexionen — Project Documentation
+# Kant Reflexionen
 
-A research tool for browsing, searching, and visualising Kant's handwritten
+A research tool for browsing, searching and visualising Kant's handwritten
 notes (*Reflexionen*) from the *Akademie-Ausgabe* volumes AA 14–19, based on
 the digitised texts at [korpora.org](https://www.korpora.org/Kant/).
+
+Live: **https://kant-reflexionen.onrender.com**
 
 ---
 
@@ -10,49 +12,40 @@ the digitised texts at [korpora.org](https://www.korpora.org/Kant/).
 
 ```
 kant_reflexionen/
-├── kant_reflexionen_parser.py  # scraper: builds the SQLite database
-├── kant_sources.py             # resolves source abbreviations to URLs
-├── kant_browse.py              # interactive CLI browser
-├── kant_diagnose.py            # diagnostic tool for checking parser output
-├── inject_anchors.py           # adds §-anchors to Meier/Eberhard HTML files
-├── main.py                     # FastAPI web backend
-├── requirements.txt            # Python dependencies
-├── render.yaml                 # Render.com deployment config
+├── kant_reflexionen_parser.py   # scraper: builds the SQLite database
+├── kant_provenienzen.py         # parses Adickes provenance tables
+├── kant_sources.py              # resolves source abbreviations → deep URLs
+├── kant_browse.py               # interactive CLI browser
+├── inject_anchors.py            # adds §/page anchors to source-text HTML files
+├── main.py                      # FastAPI backend
+├── requirements.txt
+├── render.yaml                  # Render.com deployment config
+├── kant_reflexionen.db          # SQLite database (committed, ~13 MB)
+├── provenienzen/                # Adickes provenance tables (HTML)
+│   ├── L-notizen.html
+│   ├── M-notizen.html
+│   ├── Th-notizen.html
+│   ├── J-notizen.html
+│   ├── Pr-notizen.html
+│   ├── B-notizen.html
+│   └── briefe.html
 └── static/
-    └── index.html              # single-file web frontend
+    └── index.html               # single-file web frontend
 ```
 
 ---
 
 ## 1. Prerequisites
 
-### Python
-
-Python 3.10 or later is required.
-
-**Recommended: use WSL2 on Windows** (Ubuntu via the Microsoft Store).
-Open a WSL terminal and install Python tools:
+Python 3.10+ required.
 
 ```bash
-sudo apt update && sudo apt install python3-pip python3-venv -y
-```
-
-### Virtual environment
-
-```bash
-cd ~/kant_reflexionen
 python3 -m venv .venv
-source .venv/bin/activate        # Linux / WSL
-# .venv\Scripts\activate         # Windows native Python
-```
+source .venv/bin/activate       # Linux / macOS
+# .venv\Scripts\activate        # Windows
 
-### Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
-
-This installs: `beautifulsoup4`, `lxml`, `requests`, `rich`, `fastapi`, `uvicorn`.
 
 ---
 
@@ -66,100 +59,142 @@ Mirror the Kant corpus with HTTrack, then run:
 python kant_reflexionen_parser.py --local /path/to/schriften
 ```
 
-HTTrack saves pages as `schriften/www.korpora.org/Kant/aa16/003.html` etc.
-If your mirror root is named `schriften` and is in the same directory, you
-can omit `--local` entirely — it is the default.
+The mirror saves pages as `schriften/www.korpora.org/Kant/aa16/003.html` etc.
+If the mirror is in a folder named `schriften` in the same directory,
+`--local` can be omitted — it is the default.
+
+The `provenienzen/` directory is also read automatically (default path:
+`provenienzen/` next to the script). Override with `--provenienzen DIR`.
 
 ```bash
-python kant_reflexionen_parser.py                        # all 6 volumes
-python kant_reflexionen_parser.py --volumes 16 17        # specific volumes
-python kant_reflexionen_parser.py --resume               # continue after interruption
-python kant_reflexionen_parser.py --db myfile.db         # custom DB path
+python kant_reflexionen_parser.py                          # all 6 volumes
+python kant_reflexionen_parser.py --volumes 16 17          # specific volumes
+python kant_reflexionen_parser.py --resume                 # continue after interruption
+python kant_reflexionen_parser.py --db myfile.db           # custom DB path
+python kant_reflexionen_parser.py --provenienzen /my/prov  # custom provenance dir
 ```
 
-### Option B — Live HTTP (slower, network-dependent)
+### Option B — Live HTTP
 
 ```bash
 python kant_reflexionen_parser.py --local "" --delay 0.5
 ```
 
-Pass an empty string for `--local` to force HTTP mode.
-The `--delay` flag sets seconds between requests (default: 0.5).
+---
 
-### What the scraper produces
-
-A SQLite database `kant_reflexionen.db` with this schema:
+## 3. Database schema
 
 | Column | Example | Description |
 |---|---|---|
 | `number` | `1562`, `158a` | Adickes number (primary key) |
 | `volume` | `16` | AA volume number |
-| `page_start` / `page_end` | `3` / `4` | Page span in the AA edition |
-| `dating_raw` | `α 2`, `β 1--ε 2` | Adickes phase code(s), as printed |
-| `date_from` / `date_to` | `1754` / `1755` | Years derived from phase codes |
-| `source_raw` | `L 1`, `M §. 7` | Source textbook + section |
-| `note_raw` | `Zu L §. 40` | Physical location in Kant's copy |
-| `text` | `Alles, was aus einem…` | Plain text (for full-text search) |
+| `page_start` / `page_end` | `3` / `59` | Page span (multi-page reflexionen supported) |
+| `dating_raw` | `ω¹ (1790)`, `ρ? ς?` | Adickes phase code(s), as printed |
+| `date_from` / `date_to` | `1790` / `1791` | Years derived from phase codes |
+| `source_raw` | `Loses Blatt A 7`, `L 18` | Expanded source location |
+| `note_raw` | `Neben L §. 66-68` | Specific location within Kant's copy |
+| `text` | plain text | For full-text search |
 | `text_html` | `<i>attentio.</i>…` | Formatted HTML (deletions, italics, etc.) |
-| `url_start` | `https://korpora.org/…` | Link to the AA page on korpora.org |
-| `source_url` | `https://korpora.org/…#7` | Deep link into the source textbook |
-
-### Dating phase codes
-
-Adickes assigned each phase a Greek letter (α1 = ~1753–54, ω5 = 1798–1804).
-`date_from`/`date_to` are the union of all phases in `dating_raw`.
-Non-standard datings like `60-70er Jahre` are stored in `dating_raw`
-but produce `NULL` for `date_from`/`date_to`.
+| `url_start` | `https://korpora.org/…` | AA page on korpora.org |
+| `source_url` | `https://noamhoffer.github.io/…#66` | Deep link into source textbook |
+| `brief_url` | `https://korpora.org/kant/briefe/…` | Link to letter (Briefe only) |
 
 ---
 
-## 3. Diagnosing parser problems
+## 4. Provenance tables
 
-Before a full scrape, verify the parser works on a sample page:
+Source and location data (`source_raw`, `note_raw`) come entirely from the
+Adickes *Provenienzen* tables, not from HTML parsing. The tables are in the
+`provenienzen/` directory and are parsed by `kant_provenienzen.py`.
 
-```bash
-python kant_diagnose.py                           # tests AA16 pages 3, 169, 320 from web
-python kant_diagnose.py --vol 16 --page 169       # single page from web
-python kant_diagnose.py --local schriften --vol 16 --page 169  # from local mirror
-python kant_diagnose.py --pages 3 169 320 401     # multiple pages
-```
+| File | Source |
+|---|---|
+| `L-notizen.html` | Meier, *Vernunftlehre* |
+| `M-notizen.html` | Baumgarten, *Metaphysica* |
+| `Th-notizen.html` | Eberhard, *Theologie* |
+| `J-notizen.html` | Achenwall, *Juris naturalis* |
+| `Pr-notizen.html` | Baumgarten, *Initia* |
+| `B-notizen.html` | Kant, *Beobachtungen* Handexemplar |
+| `briefe.html` | Notes written on letters to Kant |
 
-Each page shows:
-- Bold tags found and whether they match the header pattern
-- First table rows
-- `parse_page()` output with HEADER / line items
-- Quality checks: ✓ or ✗ for headers, dating, source
+8,092 reflexionen are covered. Those not in the tables (variant `a`-suffix
+numbers, loose manuscript sources) have `NULL` for `source_raw` / `note_raw`.
+
+Source abbreviations are automatically expanded:
+`L Bl. A 7` → `Loses Blatt A 7`, `Ms.` → `Manuscript`, etc.
 
 ---
 
-## 4. CLI browser
+## 5. Dating
 
-Browse the database interactively in the terminal:
+The parser handles the full range of Adickes dating conventions:
 
-```bash
-python kant_browse.py                         # uses kant_reflexionen.db
-python kant_browse.py --db myfile.db          # custom DB path
-```
+| `dating_raw` | `date_from` | `date_to` | Notes |
+|---|---|---|---|
+| `ω¹ (1790)` | 1790 | 1790 | Exact year in parentheses |
+| `ω² (1793—4)` | 1793 | 1794 | Year range in parentheses |
+| `ψ` + letter dated 7. Febr. 1784 | 1784 | 1784 | Letter date from `note_raw` |
+| `ρ? ς?` | 1773 | 1777 | Multiple phases → union of ranges |
+| `ω³⁻⁴` | 1794 | 1798 | Superscript phase range |
+| `ψ—ω` | 1780 | 1804 | Dashed phase range |
+| `1788—91` | 1788 | 1791 | Bare year range |
+| `60-70er Jahre` | 1760 | 1779 | Decade strings |
 
-### Commands at the prompt
+99.5% of reflexionen have a resolved `date_from`/`date_to`. The remaining 39
+with `NULL` are genuinely undatable (loose leaf identifiers, *Vacat*, etc.).
 
-| Command | Example | Action |
+---
+
+## 6. Source textbook deep links
+
+`kant_sources.py` resolves `source_raw` + `note_raw` to a URL into the hosted
+source texts. All source files are hosted at
+`https://noamhoffer.github.io/kant-sources/` with anchor-injected HTML
+(anchors added by `inject_anchors.py`).
+
+Two anchor types per file:
+- `#N` — section anchor (§ number)
+- `#pN` — page anchor (page in Kant's copy)
+
+When `note_raw` contains a § reference (e.g. `Neben L §. 66-68`), the URL
+points to that section (`#66`). Otherwise it points to the page (`#p18`).
+
+| Abbr | Textbook | Files |
 |---|---|---|
-| `<number>` | `1562`, `158a` | Look up a reflexion |
-| `n` / `p` | | Next / previous |
-| `s <term>` | `s L 1`, `s M §` | Search by source |
-| `d <from> [<to>]` | `d 1769`, `d 1769 1772` | Filter by date range |
-| `l` | | Show current result list |
-| `l +` / `l -` | | Page through results |
-| `i` | | Database summary |
-| `h` | | Help |
-| `q` | | Quit |
+| `L` | Meier, *Vernunftlehre* (1752) | `meier/vernunftlehre_1.html` (§§ 1–284), `vernunftlehre_2.html` (§§ 285–563) |
+| `M` | Baumgarten, *Metaphysica* (1757) | `agb-metaphysica/I.html`, `II1Ba.html`, … `II4.html` |
+| `Pr` | Baumgarten, *Initia* (1760) | `agb-initia/index.html` |
+| `Th` | Eberhard, *Theologie* (1781) | `eberhard/eberhard.html` |
+| `J` | Achenwall, *Juris naturalis* (1763) | `achenwall/achenwall_2.html` (§§ 85–208), `achenwall_3.html` (§§ 209–288) |
+| `B` | Kant, *Beobachtungen* | not digitised |
+| `R V` | Kant, *KrV* Handexemplar | not digitised |
 
-Install `rich` for coloured output (already in `requirements.txt`).
+### Adding anchors to source text files
+
+```bash
+# Meier (two files)
+python inject_anchors.py meier/vernunftlehre_1.html  out/meier/vernunftlehre_1.html
+python inject_anchors.py meier/vernunftlehre_2.html  out/meier/vernunftlehre_2.html
+
+# Eberhard (bare-number headings <h3>N</h3>)
+python inject_anchors.py --eberhard eberhard/eberhard.html  out/eberhard/eberhard.html
+
+# Baumgarten Metaphysica (§ anchors already present, page anchors only)
+python inject_anchors.py --dir agb-metaphysica/  out/agb-metaphysica/  --pages-only
+
+# Baumgarten Initia
+python inject_anchors.py agb-initia/index.html  out/agb-initia/index.html
+
+# Achenwall (files 2 and 3 only; file 1 and index are ToC)
+python inject_anchors.py --dir achenwall/  out/achenwall/
+```
+
+Each file is identified automatically by filename — no flags needed except
+`--pages-only` for Metaphysica and `--eberhard` for Eberhard.
 
 ---
 
-## 5. Web application
+## 7. Web application
 
 ### Run locally
 
@@ -168,132 +203,105 @@ uvicorn main:app --reload
 ```
 
 Open **http://localhost:8000** for the web interface,
-or **http://localhost:8000/docs** for the interactive API explorer.
+or **http://localhost:8000/docs** for the API explorer.
 
 ### API endpoints
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/reflexion/{number}` | Full text + metadata for one reflexion |
-| `GET /api/neighbours/{number}` | Previous / next reflexion numbers |
-| `GET /api/search` | Search: `?q=`, `?source=`, `?date_from=`, `?date_to=`, `?volume=` |
-| `GET /api/filter/dates` | `?year_from=1769&year_to=1772` |
-| `GET /api/filter/source` | `?abbr=M` |
-| `GET /api/stats` | Counts by volume and source |
-| `GET /api/timeline` | Year-by-year counts for the chart |
+| Endpoint | Parameters | Description |
+|---|---|---|
+| `GET /api/stats` | — | Counts by volume and source |
+| `GET /api/timeline` | `source=`, `volume=` | Year-by-year density for the chart |
+| `GET /api/search` | `q=`, `source=`, `date_from=`, `date_to=`, `volume=`, `page=` | Search + filter |
+| `GET /api/reflexion/{number}` | — | Full text + metadata |
+| `GET /api/neighbours/{number}` | — | Prev / next numbers |
+
+Default ordering is by AA sequence (volume, page). When a date filter is
+active, results are ordered chronologically with undated entries last.
 
 ### Frontend features
 
-- **Timeline** — bar chart of reflexionen by year; click a bar to filter
-- **Search panel** — free-text search, source dropdown, date range inputs
-- **Results list** — paginated cards with number, dating, source, preview
-- **Detail panel** — full text with formatting, metadata, source deep link,
-  sequential prev/next navigation
+- **Go to reflexion №** — always visible at top; jump directly by Adickes number
+- **Search & filter** — collapsible panel with free-text search, topic checkboxes
+  (Math / Anthropology / Logic / Metaphysics / Ethics), source dropdown, date range
+- **Timeline** — dual-dataset Chart.js chart: density curve + exact-year bars;
+  click a bar to filter by that year
+- **Results list** — paginated cards showing number, dating, source, text preview
+- **Detail panel** — old-paper background; full formatted text, metadata, source
+  deep link, letter link (for Briefe), prev/next navigation
 
-**Text formatting conventions displayed:**
-- *Italic* — Latin phrases / emphasis (`<i>`)
-- ~~Strikethrough~~ — Kant's deletions
-- `s p a c e d` — *Gesperrt* (German spaced emphasis)
-- `↑word↑` — interlinear addition `( g word )`
-- `‖word‖` — marginal addition `( s word )`
+**Text formatting displayed:**
+
+| Symbol | Meaning |
+|---|---|
+| *italic* | Latin / emphasis |
+| ~~strikethrough~~ | Kant's deletions |
+| `s p a c e d` | *Gesperrt* (spaced emphasis) |
+| `↑word↑` | Interlinear addition |
+| `‖word‖` | Marginal addition |
 
 ---
 
-## 6. Source textbook cross-references
+## 8. Deploying to Render.com
 
-The `source_url` field links directly into the digitised source texts.
-URLs are resolved by `kant_sources.py` from the `source_raw` field.
+The database (~13 MB) is committed to the repository, so no separate upload
+is needed.
 
-| Abbreviation | Textbook | Status |
-|---|---|---|
-| `L` | Meier, *Auszug aus der Vernunftlehre* (1752) | §-anchors via GitHub Pages |
-| `M` | Baumgarten, *Metaphysica* (1757) | §-anchors native on korpora.org |
-| `Pr` | Baumgarten, *Initia Philosophiae Practicae* (1760) | §-anchors native |
-| `Th` | Eberhard, *Vorbereitung zur natürl. Theologie* (1781) | §-anchors via GitHub Pages |
-| `J` | Achenwall, *Juris naturalis pars posterior* (1763) | two-page split |
-| `B` | Kant, *Beobachtungen* (Handexemplar) | not digitised online |
-| `R V` | Kant, *Kritik der reinen Vernunft* (Handexemplar) | not digitised online |
+1. Push everything to GitHub:
+   ```bash
+   git add .
+   git commit -m "deploy"
+   git push
+   ```
 
-### Adding §-anchors to Meier and Eberhard
+2. Go to [render.com](https://render.com) → **New → Web Service**
 
-Meier and Eberhard are published as single long HTML pages with no native
-section anchors. To enable deep links, host anchor-injected versions on
-GitHub Pages:
+3. Connect the `noamhoffer/kant_reflexionen` repository
+
+4. Settings:
+   - **Build command**: `pip install -r requirements.txt`
+   - **Start command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Instance type**: Free
+
+5. Click **Deploy** — the app is live within ~2 minutes.
+
+Every subsequent `git push` triggers an automatic redeploy.
+
+The free tier sleeps after 15 minutes of inactivity and wakes in ~30 seconds
+on the first request.
+
+---
+
+## 9. Typical workflow
 
 ```bash
-# 1. Download originals
-curl -o meier_orig.html    "https://korpora.org/kant/meier/"
-curl -o eberhard_orig.html "http://www.korpora.org/kant/eberhard/eberhard.html"
-
-# 2. Inject anchors
-python inject_anchors.py meier_orig.html    meier.html
-python inject_anchors.py eberhard_orig.html eberhard.html
-
-# 3. Push meier.html and eberhard.html to a GitHub Pages repo
-```
-
-Then update `kant_sources.py` with your GitHub Pages URLs:
-
-```python
-MEIER_URL    = "https://yourname.github.io/kant-sources/meier.html"
-EBERHARD_URL = "https://yourname.github.io/kant-sources/eberhard.html"
-```
-
----
-
-## 7. Deploying to Render.com (free hosting)
-
-1. Push all project files to a GitHub repository
-   (include `kant_reflexionen.db` or configure `DB_PATH` to a persistent disk path)
-2. Go to [render.com](https://render.com) → New → Web Service
-3. Connect your GitHub repo
-4. Render will detect `render.yaml` and configure automatically
-5. Set the environment variable `DB_PATH` if your DB is not at the repo root
-
-The `render.yaml` configures:
-- Build: `pip install -r requirements.txt`
-- Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- 1 GB persistent disk at `/data` for the SQLite file
-
-On the free tier the service sleeps after 15 minutes of inactivity and
-wakes in ~30 seconds on the next request — acceptable for a research tool.
-
----
-
-## 8. Typical workflow
-
-```bash
-# First time setup
+# Initial setup
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Verify parser on a few pages before committing to full scrape
-python kant_diagnose.py --vol 16 --pages 3 169 320
-
-# Scrape (from local mirror — fastest)
+# Build / rebuild the database from a local mirror
 python kant_reflexionen_parser.py
 
-# Browse locally
-python kant_browse.py
-
-# Run the web app
+# Run the web app locally
 uvicorn main:app --reload
-# → open http://localhost:8000
+# → http://localhost:8000
+
+# After code changes, rebuild and redeploy
+python kant_reflexionen_parser.py
+git add kant_reflexionen.db
+git commit -m "updated db"
+git push
 ```
 
 ---
 
-## 9. Re-scraping after code changes
+## 10. Re-scraping after schema changes
 
-The parser is idempotent with `--resume`, but if the DB schema changes
-(e.g. adding a new column) it is safer to start fresh:
+The parser is idempotent with `--resume`, but after schema changes start fresh:
 
 ```bash
 rm kant_reflexionen.db
 python kant_reflexionen_parser.py
 ```
 
-The `kant_browse.py` CLI runs automatic migrations on startup to add
-columns introduced after the initial scrape (currently `source_url`
-and `text_html`), so existing databases do not need to be rebuilt just
-for those.
+`kant_browse.py` runs automatic migrations on startup to add columns
+introduced after an initial scrape (`text_html`, `source_url`, `brief_url`).
