@@ -595,6 +595,11 @@ def parse_page(html):
     Returns a list of dicts:
       number, dating, text, text_html,
       continuation (bool), complete (bool)
+
+    Three cases for a reflexion that spans multiple pages:
+      Start page:  has NOTIZ-N-A, no NOTIZ-N-E  → complete=False
+      Middle page: no NOTIZ markers at all       → continuation=True, number=None
+      End page:    has NOTIZ-N-E, no NOTIZ-N-A  → continuation=True, complete=True
     """
     results  = []
     markers  = list(_NOTIZ_RE.finditer(html))
@@ -603,16 +608,27 @@ def parse_page(html):
     seen_a   = {n for n, k, _, _ in spans if k == "A"}
     seen_e   = {n for n, k, _, _ in spans if k == "E"}
 
-    # Continuations: -E on this page but no matching -A
+    # ── Middle pages: no NOTIZ markers at all ────────────────────────────────
+    # The entire page content belongs to whatever reflexion is currently open.
+    # We don't know the number here — process_page resolves it from the DB.
+    if not spans:
+        text_html, text_plain = _extract_text(html)
+        if text_plain:
+            results.append(dict(number=None, dating="",
+                                text=text_plain, text_html=text_html,
+                                continuation=True, complete=False))
+        return results
+
+    # ── End pages: -E present but no matching -A ──────────────────────────────
     for num in seen_e - seen_a:
         e_pos = next(s for n, k, s, _ in spans if n == num and k == "E")
-        _, text_plain = _extract_text(html[:e_pos])
+        text_html, text_plain = _extract_text(html[:e_pos])
         if text_plain:
             results.append(dict(number=num, dating="",
-                                text=text_plain, text_html="",
+                                text=text_plain, text_html=text_html,
                                 continuation=True, complete=True))
 
-    # Reflexionen starting on this page
+    # ── Start (and single-page) reflexionen ───────────────────────────────────
     for num, kind, a_start, a_end in spans:
         if kind != "A":
             continue
@@ -842,25 +858,35 @@ def process_page(reflexionen: list[dict], volume: int, page: int, url: str,
     """
     for r in reflexionen:
         if r["continuation"]:
-            # Page opens mid-reflexion — find the most recent and append
-            row = con.execute(
-                """SELECT number FROM reflexionen
-                   WHERE volume=? ORDER BY page_start DESC, rowid DESC LIMIT 1""",
-                (volume,),
-            ).fetchone()
+            # Determine which reflexion this continuation belongs to.
+            # If number is None (middle page, no NOTIZ markers), find the most
+            # recently inserted reflexion for this volume that is still open
+            # (page_end == page_start, i.e. hasn't been closed by an -E yet).
+            # If number is known (-E page), use it directly.
+            if r["number"] is None:
+                row = con.execute(
+                    """SELECT number FROM reflexionen
+                       WHERE volume=? AND page_start = page_end
+                       ORDER BY page_start DESC, rowid DESC LIMIT 1""",
+                    (volume,),
+                ).fetchone()
+            else:
+                row = (r["number"],)
+
             if row and r["text"]:
                 existing = con.execute(
                     "SELECT text, text_html FROM reflexionen WHERE number=?",
                     (row[0],)
                 ).fetchone()
-                combined_text = ((existing[0] or "") + "\n" + r["text"]).strip()
-                combined_html = ((existing[1] or "") + "\n" + r["text_html"]).strip()
-                con.execute(
-                    """UPDATE reflexionen
-                       SET text=?, text_html=?, page_end=?
-                       WHERE number=?""",
-                    (combined_text, combined_html, page, row[0]),
-                )
+                if existing:
+                    combined_text = ((existing[0] or "") + "\n" + r["text"]).strip()
+                    combined_html = ((existing[1] or "") + "\n" + r["text_html"]).strip()
+                    con.execute(
+                        """UPDATE reflexionen
+                           SET text=?, text_html=?, page_end=?
+                           WHERE number=?""",
+                        (combined_text, combined_html, page, row[0]),
+                    )
             continue
 
         # Source and location data come exclusively from the provenienzen tables.
